@@ -75,6 +75,13 @@ final class GFNStreamController: NSObject {
     private var signalingComplete = false
     private var partiallyReliableDataChannel: LKRTCDataChannel?
     private var controlChannel: LKRTCDataChannel?
+
+    // Input sends run off the main actor on a dedicated serial queue: guarantees FIFO ordering,
+    // avoids per-packet Task hops, and decouples input latency from main-actor/run-loop congestion.
+    // libwebrtc's LKRTCDataChannel is thread-safe; this ref is set once at setup and cleared
+    // on disconnect, so nonisolated(unsafe) access from the send queue is safe.
+    private let inputSendQueue = DispatchQueue(label: "com.cloudnow.input-send", qos: .userInteractive)
+    nonisolated(unsafe) private var reliableSendChannel: LKRTCDataChannel?
     private var inputReady = false
     private var lastBytesReceived: Double = 0
     private var lastStatsTime: Date = .distantPast
@@ -152,6 +159,7 @@ final class GFNStreamController: NSObject {
         peerConnection = nil
         inputDataChannel = nil
         partiallyReliableDataChannel = nil
+        reliableSendChannel = nil
         controlChannel = nil
         videoTrack = nil
         micAudioTrack = nil
@@ -257,10 +265,24 @@ final class GFNStreamController: NSObject {
         dcConfig.isNegotiated = false
         if let dc = pc.dataChannel(forLabel: "input_channel_v1", configuration: dcConfig) {
             inputDataChannel = dc
+            reliableSendChannel = dc
             dc.delegate = self
         }
 
-        // Partially-reliable gamepad channel — server expects this alongside the reliable one
+        // Partially-reliable gamepad channel — opened because the GFN server expects it alongside
+        // the reliable one, but currently NOT used for sending. All input (including gamepad) is
+        // routed over the reliable/ordered `input_channel_v1` via `sendData` / `reliableSendChannel`.
+        //
+        // The intent of this channel is to carry v3-wrapped gamepad packets (sequence-numbered,
+        // unordered, droppable) so a single lost input packet doesn't head-of-line block subsequent
+        // ones. That path is implemented in the encoder (`wrapGamepadPartiallyReliable`) and gated
+        // on `protocolVersion >= 3`, but was found in testing to introduce a worse failure mode on
+        // clean networks: a lost absolute-state stick packet leaves the server on a stale position,
+        // which then visibly snaps on the next movement. The reliable channel avoids that entirely
+        // at the cost of HoL-blocking under packet loss — a worthwhile trade on typical connections.
+        //
+        // To revive: route gamepad packets here in `InputSender` when `protocolVersion >= 3`, and
+        // make protocol v3 negotiable for non-AV1 codecs (see the v3 gate below in this method).
         let prConfig = LKRTCDataChannelConfiguration()
         prConfig.isOrdered = false
         prConfig.maxPacketLifeTime = Int32(partialReliableThresholdMs)
@@ -282,7 +304,10 @@ final class GFNStreamController: NSObject {
             partialReliableThresholdMs = ms
         }
 
-        // AV1 uses protocol v3 (partially-reliable gamepad wrapping with sequence numbers)
+        // AV1 uses protocol v3 (partially-reliable gamepad wrapping with sequence numbers).
+        // Note: even when v3 is negotiated, gamepad packets are still sent over the RELIABLE
+        // channel — the partially-reliable channel is created but unused. See the long comment
+        // on `partiallyReliableDataChannel` above for the rationale and how to revive it.
         if settings.codec == .av1 {
             protocolVersion = 3
         }
@@ -761,6 +786,7 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             sender.setProtocolVersion(version)
             sender.deadzone = Float(self.settings.controllerDeadzone)
             sender.overlayTriggerButton = self.settings.overlayTriggerButton
+            sender.steamOverlayGestureEnabled = self.settings.enableSteamOverlayGesture
             sender.remoteMode = self.settings.defaultRemoteInputMode
             self.remoteMode = sender.remoteMode
             self.videoView?.gamepadModeActive = (self.remoteMode == .gamepad || self.remoteMode == .dualsense)
@@ -780,12 +806,12 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
 // MARK: - DataChannelSender conformance
 
 extension GFNStreamController: DataChannelSender {
+    /// Sends an encoded input packet over the reliable/ordered WebRTC data channel.
+    /// Dispatched on a dedicated serial queue to preserve packet order without main-actor hops.
     nonisolated func sendData(_ data: Data) {
-        // Access inputDataChannel on the main actor asynchronously to satisfy isolation
-        Task { @MainActor [weak self] in
-            guard let dc = self?.inputDataChannel, dc.readyState == .open else { return }
-            let buffer = LKRTCDataBuffer(data: data, isBinary: true)
-            dc.sendData(buffer)
+        inputSendQueue.async { [weak self] in
+            guard let self, let dc = self.reliableSendChannel, dc.readyState == .open else { return }
+            dc.sendData(LKRTCDataBuffer(data: data, isBinary: true))
         }
     }
 }

@@ -303,18 +303,31 @@ func mapGCControllerToXInput(_ controller: GCController, deadzone: Float = 0.15)
     let lt = UInt8(clamping: Int(pad.leftTrigger.value * 255))
     let rt = UInt8(clamping: Int(pad.rightTrigger.value * 255))
 
-    let lx = normalizeAxis(pad.leftThumbstick.xAxis.value, deadzone: deadzone)
-    let ly = normalizeAxis(pad.leftThumbstick.yAxis.value, deadzone: deadzone)
-    let rx = normalizeAxis(pad.rightThumbstick.xAxis.value, deadzone: deadzone)
-    let ry = normalizeAxis(pad.rightThumbstick.yAxis.value, deadzone: deadzone)
+    let (lx, ly) = radialDeadzone(x: pad.leftThumbstick.xAxis.value,  y: pad.leftThumbstick.yAxis.value,  deadzone: deadzone)
+    let (rx, ry) = radialDeadzone(x: pad.rightThumbstick.xAxis.value, y: pad.rightThumbstick.yAxis.value, deadzone: deadzone)
 
     return (buttons, lt, rt, lx, ly, rx, ry)
 }
 
-private func normalizeAxis(_ v: Float, deadzone: Float) -> Int16 {
-    let clamped = max(-1.0, min(1.0, v))
-    if abs(clamped) < deadzone { return 0 }
-    return Int16(clamped < 0 ? clamped * 32768 : clamped * 32767)
+/// Radial, rescaled deadzone. Treats the stick as a 2D vector: anything inside the deadzone
+/// radius maps to zero, and everything outside is remapped so output ramps *smoothly* from 0
+/// at the deadzone edge to full at the stick edge — no step discontinuity when leaving rest.
+/// (The old per-axis hard cliff jumped straight to ~deadzone×full the instant you crossed it,
+/// which lurched the camera on every move-from-idle.)
+private func radialDeadzone(x: Float, y: Float, deadzone: Float) -> (Int16, Int16) {
+    let cx = max(-1.0, min(1.0, x))
+    let cy = max(-1.0, min(1.0, y))
+    let magnitude = (cx * cx + cy * cy).squareRoot()
+    guard magnitude > deadzone, magnitude > 0 else { return (0, 0) }
+    // Remap [deadzone, 1] → [0, 1] along the stick's direction.
+    let scaled = min(1.0, (magnitude - deadzone) / (1 - deadzone))
+    let factor = scaled / magnitude
+    return (axisToInt16(cx * factor), axisToInt16(cy * factor))
+}
+
+private func axisToInt16(_ v: Float) -> Int16 {
+    let c = max(-1.0, min(1.0, v))
+    return Int16(c < 0 ? c * 32768 : c * 32767)
 }
 
 // MARK: - DataChannelSender
@@ -348,6 +361,10 @@ final class InputSender {
     /// Which controller button triggers the overlay on long-press. Matches StreamSettings.overlayTriggerButton.
     var overlayTriggerButton: OverlayTriggerButton = .start
 
+    /// When true, long-pressing the button that is NOT the overlay trigger sends Shift+Tab
+    /// (opens the Steam in-game overlay). Matches StreamSettings.enableSteamOverlayGesture.
+    var steamOverlayGestureEnabled: Bool = true
+
     /// Called when remoteMode changes due to controller connect/disconnect auto-switching.
     var onRemoteModeChanged: ((RemoteInputMode) -> Void)?
 
@@ -359,6 +376,11 @@ final class InputSender {
 
     // Gamepad bitmap: bit i = extended gamepad i is connected (matches official GFN protocol)
     private var gamepadBitmap: UInt8 = 0
+
+    // Per-controller Steam-overlay (Shift+Tab) long-press hold duration (ticks at 60 Hz).
+    private var steamHoldTicks: [Int: Int] = [:]
+    // ~1 s at 60 Hz.
+    private static let steamLongPressThreshold = 60
 
     // Siri Remote state tracking
     private var lastMicroDpad: (x: Float, y: Float) = (0, 0)
@@ -422,6 +444,7 @@ final class InputSender {
         lastDualSenseTouchpad = (0, 0)
         lastDualSenseTouchpadClick = false
         overlayHoldTicks.removeAll()
+        steamHoldTicks.removeAll()
         for controller in GCController.controllers() where controller.extendedGamepad != nil {
             if remoteMode == .gamepad || remoteMode == .dualsense {
                 claimControllerInput(controller)
@@ -446,10 +469,11 @@ final class InputSender {
             for (idx, controller) in extended.prefix(4).enumerated() {
                 var (btns, lt, rt, lx, ly, rx, ry) = mapGCControllerToXInput(controller, deadzone: deadzone)
 
-                // Long-press overlay trigger → show GFN overlay.
-                // Runs before sendData so we can clear the triggering bit,
-                // preventing the in-game action from firing simultaneously.
+                // Long-press gestures → app HUD overlay (trigger button) and Steam overlay
+                // (the other button, Shift+Tab). Run before encoding so we can clear the
+                // triggering bit, preventing the in-game action from firing simultaneously.
                 if let pad = controller.extendedGamepad {
+                    // App HUD overlay on the configured trigger button.
                     let held: Bool
                     switch overlayTriggerButton {
                     case .start:   held = pad.buttonMenu.isPressed
@@ -468,8 +492,33 @@ final class InputSender {
                     } else {
                         overlayHoldTicks[idx] = 0
                     }
+
+                    // Steam overlay on the OTHER button (whichever isn't the HUD trigger).
+                    if steamOverlayGestureEnabled {
+                        let steamHeld: Bool
+                        switch overlayTriggerButton {
+                        case .start:   steamHeld = pad.buttonOptions?.isPressed ?? false
+                        case .options: steamHeld = pad.buttonMenu.isPressed
+                        }
+                        if steamHeld {
+                            let ticks = (steamHoldTicks[idx] ?? 0) + 1
+                            steamHoldTicks[idx] = ticks
+                            if ticks == Self.steamLongPressThreshold {
+                                switch overlayTriggerButton {
+                                case .start:   btns &= ~GFNInput.back   // clear View/Back
+                                case .options: btns &= ~GFNInput.start  // clear Start
+                                }
+                                sendSteamOverlayChord()
+                            }
+                        } else {
+                            steamHoldTicks[idx] = 0
+                        }
+                    }
                 }
 
+                // Send the full gamepad state every tick (60 Hz). Packets carry ABSOLUTE stick
+                // state, so the server stays in sync through continuous re-sends — a dropped
+                // packet is corrected by the next one ~16 ms later.
                 let data = encoder.encodeGamepad(
                     controllerId: idx,
                     buttons: btns,
@@ -733,6 +782,9 @@ final class InputSender {
         guard controller.extendedGamepad != nil else { return }
         let idx = GCController.controllers().firstIndex(where: { $0 === controller }) ?? 0
         gamepadBitmap &= ~(1 << UInt8(idx & 3))
+        // Clear per-controller gesture state so a reconnect starts fresh.
+        overlayHoldTicks[idx] = nil
+        steamHoldTicks[idx] = nil
         // Revert to mouse mode when the last controller disconnects.
         if gamepadBitmap == 0 && remoteMode != .mouse {
             remoteMode = .mouse
@@ -745,6 +797,29 @@ final class InputSender {
             gamepadBitmap: gamepadBitmap
         )
         channel?.sendData(data)
+    }
+
+    // MARK: Private — Steam Overlay
+
+    /// Synthesizes a Shift+Tab keyboard chord (Steam's default in-game overlay hotkey).
+    /// Reuses the keyboard path, so it works without a physical keyboard attached.
+    ///
+    /// The keys are HELD for ~120 ms before release: sending down+up in the same instant
+    /// lets a frame-polling game miss the keypress entirely (down and up land between two
+    /// polls). A human-length hold spans several frames so Steam reliably registers it.
+    private func sendSteamOverlayChord() {
+        let shiftVK: UInt16 = 0xA0, shiftScan: UInt16 = 0x2A  // Left Shift
+        let tabVK: UInt16   = 0x09, tabScan: UInt16   = 0x0F  // Tab
+        let shiftMod: UInt16 = 0x0001
+        // Press: Shift down → Tab down.
+        channel?.sendData(encoder.encodeKeyboard(down: true, vk: shiftVK, scancode: shiftScan, modifiers: shiftMod))
+        channel?.sendData(encoder.encodeKeyboard(down: true, vk: tabVK,   scancode: tabScan,   modifiers: shiftMod))
+        // Release after a real hold: Tab up → Shift up.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            guard let self else { return }
+            self.channel?.sendData(self.encoder.encodeKeyboard(down: false, vk: tabVK,   scancode: tabScan,   modifiers: shiftMod))
+            self.channel?.sendData(self.encoder.encodeKeyboard(down: false, vk: shiftVK, scancode: shiftScan, modifiers: 0))
+        }
     }
 }
 
