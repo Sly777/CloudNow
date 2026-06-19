@@ -13,6 +13,7 @@ enum SignalingEvent {
 }
 
 // MARK: - GFN Signaling Client
+
 //
 // Uses NWConnection + NWProtocolWebSocket (system WebSocket) so Apple handles the HTTP/1.1
 // upgrade handshake and RFC 6455 framing automatically.
@@ -49,7 +50,7 @@ final class GFNSignalingClient {
         self.sessionId = sessionId
         self.serverIp = serverIp
         self.resolution = resolution
-        self.peerName = "peer-\(Int.random(in: 0..<10_000_000_000))"
+        peerName = "peer-\(Int.random(in: 0 ..< 10_000_000_000))"
     }
 
     // MARK: Connect
@@ -81,7 +82,7 @@ final class GFNSignalingClient {
         // directly. NWConnection's Happy Eyeballs cache locks subsequent retries onto the
         // same "preferred" address — explicit enumeration bypasses that.
         let resolvedIPs = await resolveIPs(hostname: host)
-        self.resolvedIPs = resolvedIPs   // expose for ICE injection
+        self.resolvedIPs = resolvedIPs // expose for ICE injection
         // Append the hostname itself as a final fallback in case direct IP connections fail.
         let candidates: [String] = resolvedIPs.isEmpty ? [host] : (resolvedIPs + [host])
         print("[Signaling] Resolved \(resolvedIPs.count) IPs for '\(host)': \(resolvedIPs.joined(separator: ", "))")
@@ -136,14 +137,14 @@ final class GFNSignalingClient {
                             conn.stateUpdateHandler = nil
                             print("[Signaling] Connected (WebSocket ready) via \(candidateHost)")
                             cont.resume()
-                        case .failed(let err):
+                        case let .failed(err):
                             conn.stateUpdateHandler = nil
                             print("[Signaling] Connection failed (\(candidateHost)): \(err)")
                             cont.resume(throwing: err)
                         case .cancelled:
                             conn.stateUpdateHandler = nil
                             cont.resume(throwing: SignalingError.cancelled)
-                        case .waiting(let err):
+                        case let .waiting(err):
                             let desc = "\(err)"
                             if desc.contains("53") || desc.contains("ECONNABORTED") {
                                 // ECONNABORTED = server rejected WS handshake — try the next IP.
@@ -161,7 +162,7 @@ final class GFNSignalingClient {
                 }
                 lastError = nil
                 connectedHost = candidateHost
-                break  // connected — stop trying candidates
+                break // connected — stop trying candidates
             } catch {
                 lastError = error
                 let desc = "\(error)"
@@ -260,13 +261,13 @@ final class GFNSignalingClient {
             guard let self else { return }
             while !Task.isCancelled {
                 do {
-                    if let text = try await self.receiveTextMessage() {
-                        self.handleMessage(text)
+                    if let text = try await receiveTextMessage() {
+                        handleMessage(text)
                     }
                 } catch {
                     if !Task.isCancelled {
                         print("[Signaling] Receive error: \(error)")
-                        self.onEvent?(.disconnected(reason: error.localizedDescription))
+                        onEvent?(.disconnected(reason: error.localizedDescription))
                     }
                     return
                 }
@@ -289,14 +290,14 @@ final class GFNSignalingClient {
                 conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { content, context, isComplete, error in
                     if let error { cont.resume(throwing: error); return }
                     let meta = context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
-                               as? NWProtocolWebSocket.Metadata
+                        as? NWProtocolWebSocket.Metadata
                     cont.resume(returning: (content, meta?.opcode, isComplete))
                 }
             }
 
             if let data = chunk { buffer.append(data) }
             if messageOpcode == nil, let op = opcode { messageOpcode = op }
-            guard isComplete else { continue }  // more chunks coming for this message
+            guard isComplete else { continue } // more chunks coming for this message
 
             switch messageOpcode {
             case .text:
@@ -305,7 +306,7 @@ final class GFNSignalingClient {
                 if buffer.count >= 2 {
                     let code = UInt16(buffer[0]) << 8 | UInt16(buffer[1])
                     let reason = buffer.count > 2
-                        ? String(data: buffer.subdata(in: 2..<buffer.count), encoding: .utf8) ?? "<non-UTF8>"
+                        ? String(data: buffer.subdata(in: 2 ..< buffer.count), encoding: .utf8) ?? "<non-UTF8>"
                         : ""
                     print("[Signaling] Server closed: code=\(code) reason=\(reason.isEmpty ? "(none)" : reason)")
                 } else {
@@ -332,8 +333,8 @@ final class GFNSignalingClient {
         let ctx = NWConnection.ContentContext(identifier: "ws-text", metadata: [meta])
         conn.send(content: data, contentContext: ctx, isComplete: true,
                   completion: .contentProcessed { err in
-            if let err { print("[Signaling] Send error: \(err)") }
-        })
+                      if let err { print("[Signaling] Send error: \(err)") }
+                  })
     }
 
     // MARK: Private — Message Handling
@@ -414,7 +415,8 @@ final class GFNSignalingClient {
                 while let info = cur {
                     var buf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
                     if getnameinfo(info.pointee.ai_addr, info.pointee.ai_addrlen,
-                                   &buf, socklen_t(NI_MAXHOST), nil, 0, NI_NUMERICHOST) == 0 {
+                                   &buf, socklen_t(NI_MAXHOST), nil, 0, NI_NUMERICHOST) == 0
+                    {
                         let ip = String(cString: buf)
                         if !ips.contains(ip) { ips.append(ip) }
                     }
@@ -424,7 +426,6 @@ final class GFNSignalingClient {
             }
         }
     }
-
 }
 
 // MARK: - Errors
