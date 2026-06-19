@@ -1,0 +1,7 @@
+# Revisions to skip in `git blame`. Configure your local clone with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# GitHub honors this file automatically in the web UI blame view.
+
+# SwiftFormat bootstrap (format-the-world commit, applied when CloudNow adopted swiftformat).
+cb33ccbfeba360ebb527e192d5ee346494cbe842
