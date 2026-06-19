@@ -14,6 +14,7 @@ import LiveKitWebRTC
 /// input, forwarding events to `inputHandler` as GFN protocol packets.
 final class VideoSurfaceView: UIView {
     override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
+    // swiftlint:disable:next force_cast - reason: layerClass override above guarantees self.layer is AVSampleBufferDisplayLayer
     private var displayLayer: AVSampleBufferDisplayLayer { layer as! AVSampleBufferDisplayLayer }
     private let renderer = WebRTCFrameRenderer()
     private var currentTrack: LKRTCVideoTrack?

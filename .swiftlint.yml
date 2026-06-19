@@ -1,0 +1,30 @@
+# Configured for SwiftLint 0.63.3 — pin in .pre-commit-config.yaml and .github/workflows/lint.yml
+# Day-1 ruleset: tuned to current CloudNow source so this config yields ZERO violations on commit.
+# Tighten progressively in follow-up PRs.
+
+included:
+  - CloudNow
+
+excluded:
+  - .build
+  - .swiftpm
+  - DerivedData
+  - .spm-packages
+  - Local.xcconfig
+
+disabled_rules:
+  # Owned by SwiftFormat; see .swiftformat (avoids tool fights)
+  - trailing_comma
+  - opening_brace
+  - vertical_whitespace
+  - trailing_whitespace
+  - colon
+  - comma
+  - statement_position
+  - mark
+
+  # TODO: re-enable in follow-up cleanup PR. Max line currently 233 chars; raising the threshold to a value
+  # that would pass cleanly is absurd, so the rule stays off until a dedicated line-wrap pass lands.
+  - line_length
+
+reporter: github-actions-logging
