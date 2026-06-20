@@ -46,3 +46,5 @@ Local.xcconfig
 
 # Opencode / AI workflow (local-only)
 .omo/
+*.xcresult
+**/xcshareddata/xcbaselines/
