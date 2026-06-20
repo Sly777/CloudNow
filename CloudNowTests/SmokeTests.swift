@@ -1,5 +1,5 @@
-import XCTest
 @testable import CloudNow
+import XCTest
 
 final class SmokeTests: XCTestCase {
     func test_testableReachesInternalSymbols() {
