@@ -29,7 +29,11 @@ final nonisolated class ControllerHaptics {
     private let weakMotor: Motor?
 
     init?(controller: GCController, queue: DispatchQueue) {
-        guard let haptics = controller.haptics else { return nil }
+        guard let haptics = controller.haptics else {
+            print("[Rumble] controller has NO haptics")
+            return nil
+        }
+        print("[Rumble] haptics localities=\(haptics.supportedLocalities.map(\.rawValue))")
 
         self.queue = queue
         strongMotor = Self.makeMotor(
@@ -87,6 +91,7 @@ final nonisolated class ControllerHaptics {
 
         do {
             try engine.start()
+            print("[Rumble] engine \(locality.rawValue) started")
         } catch {
             print("[ControllerHaptics] \(locality.rawValue) error: \(error)")
             return nil
@@ -168,7 +173,7 @@ final nonisolated class ControllerHaptics {
                 CHHapticEventParameter(parameterID: .hapticIntensity, value: 1.0),
             ],
             relativeTime: 0,
-            duration: TimeInterval(GCHapticDurationInfinite)
+            duration: TimeInterval(Double(GCHapticDurationInfinite))
         )
 
         do {
