@@ -10,7 +10,7 @@ struct HomeView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color("AppBackground").ignoresSafeArea()
 
             if viewModel.isLoading {
                 ScrollView {

@@ -53,7 +53,7 @@ struct LibraryView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color("AppBackground").ignoresSafeArea()
             if games.isEmpty, viewModel.isLibraryLoading {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 40) {
