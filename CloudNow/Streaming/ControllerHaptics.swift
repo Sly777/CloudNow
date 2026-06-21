@@ -100,6 +100,13 @@ final nonisolated class ControllerHaptics {
         return Motor(locality: locality, engine: engine)
     }
 
+    private static func intensity(for magnitude: UInt16) -> Float {
+        guard magnitude != 0 else { return 0 }
+        // GFN magnitudes are mostly in the low 5-15% of u16, and the low-freq motor
+        // must clear an activation threshold, so a linear map feels like a faint buzz.
+        return min(1, powf(Float(magnitude) / 65535, 0.4))
+    }
+
     private func setHandlers(for motor: Motor) {
         motor.engine?.stoppedHandler = { [weak self, weak motor] _ in
             self?.queue.async {
@@ -122,30 +129,17 @@ final nonisolated class ControllerHaptics {
 
     private func apply(_ magnitude: UInt16, to motor: Motor) {
         guard magnitude != motor.lastMagnitude else { return }
-
-        if magnitude == 0 {
-            if motor.playing {
-                do {
-                    try motor.player?.stop(atTime: 0)
-                } catch {
-                    motor.log(error)
-                }
-            }
-            motor.playing = false
-            motor.lastMagnitude = magnitude
-            return
-        }
+        motor.lastMagnitude = magnitude
 
         if motor.player == nil {
+            guard magnitude != 0 else { return }
             motor.player = makePlayer(for: motor)
-            if motor.player == nil {
-                return
-            }
+            guard motor.player != nil else { return }
         }
 
         let parameter = CHHapticDynamicParameter(
             parameterID: .hapticIntensityControl,
-            value: Float(magnitude) / 65535.0,
+            value: Self.intensity(for: magnitude),
             relativeTime: 0
         )
         do {
@@ -154,7 +148,7 @@ final nonisolated class ControllerHaptics {
             motor.log(error)
         }
 
-        if !motor.playing {
+        if !motor.playing, magnitude != 0 {
             do {
                 try motor.player?.start(atTime: 0)
                 motor.playing = true
@@ -162,8 +156,6 @@ final nonisolated class ControllerHaptics {
                 motor.log(error)
             }
         }
-
-        motor.lastMagnitude = magnitude
     }
 
     private func makePlayer(for motor: Motor) -> CHHapticPatternPlayer? {
