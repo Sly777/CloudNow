@@ -28,10 +28,10 @@ struct LoginView: View {
             VStack(spacing: 12) {
                 Image(systemName: "play.tv.fill")
                     .font(.system(size: 80))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                 Text("CloudNow")
                     .font(.system(size: 52, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                 Text("GeForce NOW for Apple TV")
                     .font(.title3)
                     .foregroundStyle(.secondary)
@@ -57,7 +57,7 @@ struct LoginView: View {
         VStack(spacing: 40) {
             Text("Sign in to GeForce NOW")
                 .font(.title.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
 
             // QR code
             if let qrImage = generateQRCode(from: urlComplete) {
@@ -76,7 +76,7 @@ struct LoginView: View {
                     .foregroundStyle(.secondary)
                 Text(url)
                     .font(.system(size: 32, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                 Text("and enter this PIN:")
                     .font(.title3)
                     .foregroundStyle(.secondary)
@@ -113,10 +113,10 @@ struct LoginView: View {
         VStack(spacing: 24) {
             ProgressView()
                 .scaleEffect(2)
-                .tint(.white)
+                .tint(.primary)
             Text("Signing in...")
                 .font(.title2)
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
         }
     }
 
@@ -129,7 +129,7 @@ struct LoginView: View {
                 .foregroundStyle(.yellow)
             Text("Sign In Failed")
                 .font(.title.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
             Text(message)
                 .font(.body)
                 .foregroundStyle(.secondary)

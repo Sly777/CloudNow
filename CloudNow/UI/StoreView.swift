@@ -148,7 +148,7 @@ struct StoreView: View {
                 .foregroundStyle(.secondary)
             Text(viewModel.error != nil ? "Failed to Load Games" : "No games available")
                 .font(.title2.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
             if let err = viewModel.error {
                 Text(err)
                     .font(.caption)

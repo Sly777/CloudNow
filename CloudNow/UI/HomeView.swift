@@ -149,7 +149,7 @@ struct HomeView: View {
             HStack(spacing: 10) {
                 Text(title)
                     .font(.title2.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                 if let badge {
                     Text(badge)
                         .font(.caption.weight(.bold))
@@ -218,7 +218,7 @@ struct HomeView: View {
                 .foregroundStyle(.secondary)
             Text("Nothing here yet")
                 .font(.title2.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
             Text("Start playing a game to see it here, or add favorites from the Library.")
                 .font(.body)
                 .foregroundStyle(.secondary)

@@ -186,7 +186,7 @@ struct LibraryView: View {
                 .foregroundStyle(.secondary)
             Text(viewModel.libraryError != nil ? "Library Failed to Load" : "Library Empty")
                 .font(.title2.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
             if let err = viewModel.libraryError ?? viewModel.error {
                 Text(err)
                     .font(.caption)
