@@ -141,6 +141,7 @@ final class GFNStreamController: NSObject {
     private var peerConnection: LKRTCPeerConnection?
     private var inputDataChannel: LKRTCDataChannel?
     @ObservationIgnored private nonisolated(unsafe) var reliableSendChannel: LKRTCDataChannel?
+    @ObservationIgnored private nonisolated(unsafe) var rumbleSink: ((Int, UInt16, UInt16) -> Void)?
     @ObservationIgnored private nonisolated(unsafe) var inputGenerated: UInt64 = 0
     @ObservationIgnored private nonisolated(unsafe) var inputSubmitted: UInt64 = 0
     @ObservationIgnored private nonisolated(unsafe) var inputAccepted: UInt64 = 0
@@ -340,6 +341,7 @@ final class GFNStreamController: NSObject {
             inputDropped &+= UInt64(pending.count)
             pending.forEach { $0.completion(.channelUnavailable) }
         }
+        inputSendQueue.async { [weak self] in self?.rumbleSink = nil }
         partiallyReliableDataChannel = nil
         controlChannel = nil
         videoTrack = nil
@@ -1387,6 +1389,12 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             version = Int(firstWord)
             print("[DataChannel] Handshake: byte[0]=0x0e, version=\(version)")
         } else {
+            if let cmd = GFNHapticsDecoder.decode(buffer.data) {
+                inputSendQueue.async { [weak self] in
+                    self?.rumbleSink?(cmd.controllerId, cmd.weak, cmd.strong)
+                }
+                return
+            }
             print("[DataChannel] Non-handshake message on \(dataChannel.label): firstWord=\(firstWord) (0x\(String(firstWord, radix: 16)))")
             return
         }
@@ -1414,6 +1422,9 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             }
             sender.start()
             inputSender = sender
+            inputSendQueue.async { [weak self, weak sender] in
+                self?.rumbleSink = { sender?.applyRumble(controllerId: $0, weak: $1, strong: $2) }
+            }
             // Forward keyboard/mouse events from the video surface to the sender
             videoView?.inputHandler = sender
         }
