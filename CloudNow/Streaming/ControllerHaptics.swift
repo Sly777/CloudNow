@@ -2,6 +2,16 @@ import CoreHaptics
 import Foundation
 import GameController
 
+/// Gate for high-frequency rumble diagnostics. Flip `verbose` to true to stream
+/// per-frame [Rumble] logs while debugging; default off (no console flood, no per-frame I/O).
+nonisolated enum RumbleLog {
+    static let verbose = false
+
+    static func frame(_ message: @autoclosure () -> String) {
+        if verbose { print(message()) }
+    }
+}
+
 final nonisolated class ControllerHaptics {
     private final class Motor: @unchecked Sendable {
         let locality: GCHapticsLocality
@@ -137,9 +147,11 @@ final nonisolated class ControllerHaptics {
             guard motor.player != nil else { return }
         }
 
+        let value = Self.intensity(for: magnitude)
+        RumbleLog.frame("[Rumble] \(motor.locality.rawValue) mag=\(magnitude) intensity=\(value)")
         let parameter = CHHapticDynamicParameter(
             parameterID: .hapticIntensityControl,
-            value: Self.intensity(for: magnitude),
+            value: value,
             relativeTime: 0
         )
         do {
