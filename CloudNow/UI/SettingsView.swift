@@ -188,6 +188,36 @@ struct SettingsView: View {
                     LabeledContent {
                         HStack(spacing: 16) {
                             Button {
+                                vm.streamSettings.rumbleAdjust = max(-1, vm.streamSettings.rumbleAdjust - 0.25)
+                            } label: {
+                                Image(systemName: "minus.circle")
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(vm.streamSettings.rumbleAdjust <= -1)
+                            Text(rumbleAdjustLabel(vm.streamSettings.rumbleAdjust))
+                                .monospacedDigit()
+                                .frame(minWidth: 56)
+                                .padding(.horizontal, 24)
+                            Button {
+                                vm.streamSettings.rumbleAdjust = min(1, vm.streamSettings.rumbleAdjust + 0.25)
+                            } label: {
+                                Image(systemName: "plus.circle")
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(vm.streamSettings.rumbleAdjust >= 1)
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Adjust Rumble")
+                            Text("Leave at 0 unless rumble feels too weak. Increasing it overdrives the motors and can overheat or damage your controller.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    LabeledContent {
+                        HStack(spacing: 16) {
+                            Button {
                                 vm.streamSettings.controllerDeadzone = max(StreamSettings.minControllerDeadzone, vm.streamSettings.controllerDeadzone - 0.01)
                             } label: {
                                 Image(systemName: "minus.circle")
@@ -332,6 +362,10 @@ struct SettingsView: View {
 
     private func statsModeDescription(_ mode: StreamStatsMode) -> String {
         L10n.streamStatsModeDescription(mode)
+    }
+
+    private func rumbleAdjustLabel(_ value: Double) -> String {
+        value == 0 ? "0" : String(format: "%+.2f", value)
     }
 }
 
