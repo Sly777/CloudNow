@@ -1,12 +1,12 @@
 import Foundation
 
-struct RumbleCommand: Equatable {
+nonisolated struct RumbleCommand: Equatable {
     let controllerId: Int
     let weak: UInt16
     let strong: UInt16
 }
 
-enum GFNHapticsDecoder {
+nonisolated enum GFNHapticsDecoder {
     static func decode(_ data: Data) -> RumbleCommand? {
         let bytes = [UInt8](data)
         guard let firstWord = readUInt16LE(bytes, at: 0) else { return nil }
