@@ -1413,7 +1413,8 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
                 overlayTriggerButton: settings.overlayTriggerButton,
                 steamOverlayGestureEnabled: settings.enableSteamOverlayGesture,
                 remoteMode: settings.defaultRemoteInputMode,
-                rumbleEnabled: settings.rumbleEnabled
+                rumbleEnabled: settings.rumbleEnabled,
+                rumbleAdjust: settings.rumbleAdjust
             )
             remoteMode = settings.defaultRemoteInputMode
             videoView?.gamepadModeActive = (remoteMode == .gamepad || remoteMode == .dualsense)
