@@ -176,6 +176,15 @@ struct SettingsView: View {
                 }
 
                 Section(L10n.text("controller")) {
+                    Toggle(isOn: $vm.streamSettings.rumbleEnabled) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Controller Rumble")
+                            Text("Allow supported controllers to rumble during streams. Applies when the next session starts.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                    }
                     LabeledContent {
                         HStack(spacing: 16) {
                             Button {
