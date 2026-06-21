@@ -15,6 +15,7 @@ struct StreamSettings: Codable, Equatable {
     var gameLanguage: String = "en_US"
     var enableL4S: Bool = false
     var micEnabled: Bool = false
+    var rumbleEnabled: Bool = true
     /// Radial deadzone applied to analog stick axes (0.0–1.0). Default 15%.
     var controllerDeadzone: Double = 0.15
     /// Which controller button triggers the GFN overlay on long-press. Default: Start (≡).
@@ -54,7 +55,7 @@ struct StreamSettings: Codable, Equatable {
 extension StreamSettings {
     enum CodingKeys: String, CodingKey {
         case resolution, fps, maxBitrateKbps, codec, colorQuality, keyboardLayout
-        case gameLanguage, enableL4S, micEnabled, controllerDeadzone, overlayTriggerButton
+        case gameLanguage, enableL4S, micEnabled, rumbleEnabled, controllerDeadzone, overlayTriggerButton
         case defaultRemoteInputMode, preferredZoneUrl
         case enableSteamOverlayGesture
         case statsMode, enableRtcEventLog
@@ -73,6 +74,7 @@ extension StreamSettings {
         gameLanguage = try c.decodeIfPresent(String.self, forKey: .gameLanguage) ?? d.gameLanguage
         enableL4S = try c.decodeIfPresent(Bool.self, forKey: .enableL4S) ?? d.enableL4S
         micEnabled = try c.decodeIfPresent(Bool.self, forKey: .micEnabled) ?? d.micEnabled
+        rumbleEnabled = try c.decodeIfPresent(Bool.self, forKey: .rumbleEnabled) ?? d.rumbleEnabled
         controllerDeadzone = try c.decodeIfPresent(Double.self, forKey: .controllerDeadzone) ?? d.controllerDeadzone
         overlayTriggerButton = try c.decodeIfPresent(OverlayTriggerButton.self, forKey: .overlayTriggerButton) ?? d.overlayTriggerButton
         defaultRemoteInputMode = try c.decodeIfPresent(RemoteInputMode.self, forKey: .defaultRemoteInputMode) ?? d.defaultRemoteInputMode
