@@ -3,8 +3,8 @@ import Foundation
 // MARK: - Zone Model
 
 struct GFNZone: Identifiable, Equatable {
-    let id: String           // e.g. "NP-AWS-US-N-Virginia-1"
-    let region: String       // e.g. "US"
+    let id: String // e.g. "NP-AWS-US-N-Virginia-1"
+    let region: String // e.g. "US"
     let regionSuffix: String // e.g. "AWS-N-Virginia-1"
     let queuePosition: Int
     let etaMs: Double?
@@ -13,13 +13,13 @@ struct GFNZone: Identifiable, Equatable {
     var isMeasuring: Bool
 
     static let regionMeta: [String: (label: String, flag: String)] = [
-        "US":   ("North America", "🇺🇸"),
-        "EU":   ("Europe", "🇪🇺"),
-        "JP":   ("Japan", "🇯🇵"),
-        "KR":   ("South Korea", "🇰🇷"),
-        "CA":   ("Canada", "🇨🇦"),
+        "US": ("North America", "🇺🇸"),
+        "EU": ("Europe", "🇪🇺"),
+        "JP": ("Japan", "🇯🇵"),
+        "KR": ("South Korea", "🇰🇷"),
+        "CA": ("Canada", "🇨🇦"),
         "THAI": ("Southeast Asia", "🇹🇭"),
-        "MY":   ("Malaysia", "🇲🇾"),
+        "MY": ("Malaysia", "🇲🇾"),
     ]
 }
 
@@ -32,7 +32,7 @@ actor ZoneClient {
 
     /// Fetches available GFN zones and their queue depths.
     func fetchZones() async throws -> [GFNZone] {
-        async let queueTask   = fetchQueueData()
+        async let queueTask = fetchQueueData()
         async let mappingTask = fetchMappingData()
         let (queueData, mappingData) = try await (queueTask, mappingTask)
 
@@ -58,9 +58,9 @@ actor ZoneClient {
 
     /// Measures ping to a zone URL (1 warm-up + 2 samples, averaged).
     func measurePing(to url: String) async -> Int? {
-        _ = await headProbe(url)  // warm-up
+        _ = await headProbe(url) // warm-up
         var samples: [Double] = []
-        for _ in 0..<2 {
+        for _ in 0 ..< 2 {
             if let ms = await headProbe(url) { samples.append(ms) }
         }
         guard !samples.isEmpty else { return nil }
@@ -131,13 +131,13 @@ extension [GFNZone] {
     func autoZone(isUnlimited: Bool = false) -> GFNZone? {
         guard !isEmpty else { return nil }
         if isUnlimited { return closestZone }
-        let maxPing  = Swift.max(compactMap(\.pingMs).max() ?? 1, 1)
+        let maxPing = Swift.max(compactMap(\.pingMs).max() ?? 1, 1)
         let maxQueue = Swift.max(map(\.queuePosition).max() ?? 1, 1)
         return min {
             let ls = (Double($0.pingMs ?? maxPing) / Double(maxPing)) * 0.4
-                   + (Double($0.queuePosition) / Double(maxQueue)) * 0.6
+                + (Double($0.queuePosition) / Double(maxQueue)) * 0.6
             let rs = (Double($1.pingMs ?? maxPing) / Double(maxPing)) * 0.4
-                   + (Double($1.queuePosition) / Double(maxQueue)) * 0.6
+                + (Double($1.queuePosition) / Double(maxQueue)) * 0.6
             return ls < rs
         }
     }
