@@ -602,6 +602,7 @@ final class InputSender {
     func applyRumble(controllerId: Int, weak: UInt16, strong: UInt16) {
         inputQueue.async { [weak self] in
             guard let self, rumbleEnabled, !self.isPaused else { return }
+            RumbleLog.frame("[Rumble] applyRumble slot=\(controllerId) weak=\(weak) strong=\(strong) hasEngine=\(haptics[controllerId] != nil)")
             haptics[controllerId]?.setMotors(strong: strong, weak: weak)
         }
     }
