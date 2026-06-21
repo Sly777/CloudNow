@@ -439,6 +439,8 @@ final class InputSender {
     private var extendedControllers: [GCController] = []
     private var microControllers: [GCController] = []
     private var controllerSlots: [ObjectIdentifier: Int] = [:]
+    private var haptics: [Int: ControllerHaptics] = [:]
+    private var rumbleEnabled = true
     private var gamepadBitmap: UInt16 = 0
     private var lastButtons: [Int: UInt16] = [:]
     private var lastSnapshots: [Int: GamepadSnapshot] = [:]
@@ -514,6 +516,8 @@ final class InputSender {
                 extendedController.playerIndex = .indexUnset
             }
             microControllers.forEach(clearControllerHandlers)
+            haptics.values.forEach { $0.cleanup() }
+            haptics.removeAll()
             GCMouse.mice().forEach(clearMouseHandlers)
             extendedControllers.removeAll()
             microControllers.removeAll()
@@ -525,7 +529,8 @@ final class InputSender {
         deadzone: Float,
         overlayTriggerButton: OverlayTriggerButton,
         steamOverlayGestureEnabled: Bool,
-        remoteMode: RemoteInputMode
+        remoteMode: RemoteInputMode,
+        rumbleEnabled: Bool = true
     ) {
         inputQueue.sync {
             encoder.setProtocolVersion(protocolVersion)
@@ -533,6 +538,7 @@ final class InputSender {
             self.overlayTriggerButton = overlayTriggerButton
             self.steamOverlayGestureEnabled = steamOverlayGestureEnabled
             self.remoteMode = remoteMode
+            self.rumbleEnabled = rumbleEnabled
         }
     }
 
@@ -555,6 +561,7 @@ final class InputSender {
                 steamTriggeredSlots.removeAll()
                 releaseHeldDiscreteInputs()
                 sendNeutralGamepads()
+                haptics.values.forEach { $0.stop() }
             } else {
                 lastSnapshots.removeAll()
             }
@@ -573,6 +580,13 @@ final class InputSender {
             }
             applyRemoteMode()
             notifyRemoteModeChanged()
+        }
+    }
+
+    func applyRumble(controllerId: Int, weak: UInt16, strong: UInt16) {
+        inputQueue.async { [weak self] in
+            guard let self, rumbleEnabled, !self.isPaused else { return }
+            haptics[controllerId]?.setMotors(strong: strong, weak: weak)
         }
     }
 
@@ -1221,6 +1235,9 @@ final class InputSender {
             extendedControllers.append(controller)
             controllerSlots[ObjectIdentifier(controller)] = slot
             controller.playerIndex = playerIndex(for: slot)
+            if rumbleEnabled, let haptic = ControllerHaptics(controller: controller, queue: inputQueue) {
+                haptics[slot] = haptic
+            }
             gamepadBitmap |= Self.extendedGamepadBitmapMask(for: slot)
             lastButtons[slot] = mapGCControllerToXInput(controller, deadzone: deadzone).buttons
             pad.valueChangedHandler = { [weak self, weak controller] _, _ in
@@ -1258,6 +1275,8 @@ final class InputSender {
         controller.playerIndex = .indexUnset
         let id = ObjectIdentifier(controller)
         if let slot = controllerSlots.removeValue(forKey: id) {
+            haptics[slot]?.cleanup()
+            haptics[slot] = nil
             extendedControllers.removeAll { $0 === controller }
             gamepadBitmap &= ~Self.extendedGamepadBitmapMask(for: slot)
             lastButtons[slot] = nil
