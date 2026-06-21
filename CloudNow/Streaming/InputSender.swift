@@ -450,6 +450,7 @@ final class InputSender {
     private var controllerSlots: [ObjectIdentifier: Int] = [:]
     private var haptics: [Int: ControllerHaptics] = [:]
     private var rumbleEnabled = true
+    private var rumbleAdjust = 0.0
     private var hapticsAdvertised = false
     private var gamepadBitmap: UInt8 = 0
     private var lastButtons: [Int: UInt16] = [:]
@@ -537,7 +538,8 @@ final class InputSender {
         overlayTriggerButton: OverlayTriggerButton,
         steamOverlayGestureEnabled: Bool,
         remoteMode: RemoteInputMode,
-        rumbleEnabled: Bool = true
+        rumbleEnabled: Bool = true,
+        rumbleAdjust: Double = 0
     ) {
         inputQueue.sync {
             encoder.setProtocolVersion(protocolVersion)
@@ -546,6 +548,7 @@ final class InputSender {
             self.steamOverlayGestureEnabled = steamOverlayGestureEnabled
             self.remoteMode = remoteMode
             self.rumbleEnabled = rumbleEnabled
+            self.rumbleAdjust = rumbleAdjust
         }
     }
 
@@ -1225,7 +1228,7 @@ final class InputSender {
             extendedControllers.append(controller)
             controllerSlots[ObjectIdentifier(controller)] = slot
             controller.playerIndex = playerIndex(for: slot)
-            if rumbleEnabled, let haptic = ControllerHaptics(controller: controller, queue: inputQueue) {
+            if rumbleEnabled, let haptic = ControllerHaptics(controller: controller, queue: inputQueue, adjust: rumbleAdjust) {
                 haptics[slot] = haptic
                 advertiseHaptics(true)
             }

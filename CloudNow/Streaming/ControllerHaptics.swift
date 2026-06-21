@@ -37,8 +37,12 @@ final nonisolated class ControllerHaptics {
     private let queue: DispatchQueue
     private let strongMotor: Motor?
     private let weakMotor: Motor?
+    private let gain: Float
 
-    init?(controller: GCController, queue: DispatchQueue) {
+    init?(controller: GCController, queue: DispatchQueue, adjust: Double = 0) {
+        let a = Float(max(-1, min(1, adjust)))
+        gain = a >= 0 ? 1 + a * 1.5 : 1 + a * 0.7
+
         guard let haptics = controller.haptics else {
             print("[Rumble] controller has NO haptics")
             return nil
@@ -110,11 +114,11 @@ final nonisolated class ControllerHaptics {
         return Motor(locality: locality, engine: engine)
     }
 
-    private static func intensity(for magnitude: UInt16) -> Float {
+    private func intensity(for magnitude: UInt16) -> Float {
         guard magnitude != 0 else { return 0 }
         // GFN magnitudes are mostly in the low 5-15% of u16, and the low-freq motor
         // must clear an activation threshold, so a linear map feels like a faint buzz.
-        return min(1, powf(Float(magnitude) / 65535, 0.4))
+        return min(1, powf(Float(magnitude) / 65535, 0.4) * gain)
     }
 
     private func setHandlers(for motor: Motor) {
@@ -147,7 +151,7 @@ final nonisolated class ControllerHaptics {
             guard motor.player != nil else { return }
         }
 
-        let value = Self.intensity(for: magnitude)
+        let value = intensity(for: magnitude)
         RumbleLog.frame("[Rumble] \(motor.locality.rawValue) mag=\(magnitude) intensity=\(value)")
         let parameter = CHHapticDynamicParameter(
             parameterID: .hapticIntensityControl,
