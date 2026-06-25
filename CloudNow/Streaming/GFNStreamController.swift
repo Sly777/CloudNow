@@ -200,9 +200,10 @@ final class GFNStreamController: NSObject {
 
     func connect(session: SessionInfo, settings: StreamSettings) async {
         // Block if already active; allow from idle, disconnected, or failed (retry case)
-        switch state {
+        let currentState = state
+        switch currentState {
         case .connecting, .streaming:
-            gfnLog.info("connect: already \(String(describing: state)), ignoring")
+            gfnLog.info("connect: already \(String(describing: currentState)), ignoring")
             return
         default: break
         }
@@ -482,7 +483,7 @@ final class GFNStreamController: NSObject {
             try AVAudioSession.sharedInstance().setCategory(
                 .playback,
                 mode: .moviePlayback,
-                options: [.allowBluetooth, .allowBluetoothA2DP]
+                options: [.allowBluetoothHFP, .allowBluetoothA2DP]
             )
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
@@ -798,7 +799,7 @@ final class GFNStreamController: NSObject {
             sdpMLineIndex: Int32(sdpMLineIndex ?? 0),
             sdpMid: sdpMid
         )
-        peerConnection?.add(ice)
+        peerConnection?.add(ice, completionHandler: { _ in })
     }
 
     // MARK: Private — Stats
