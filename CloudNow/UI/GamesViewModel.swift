@@ -18,7 +18,16 @@ struct ResumableSession {
     }
 }
 
+struct LastSessionRecord: Codable {
+    let sessionId: String
+    let serverIp: String
+    let appId: String
+    let base: String
+    let createdAt: Date
+}
+
 @Observable
+@MainActor
 class GamesViewModel {
     var mainGames: [GameInfo] = []
     var libraryGames: [GameInfo] = []
@@ -36,6 +45,10 @@ class GamesViewModel {
     var subscription: SubscriptionInfo?
     /// Session the user left without ending — available to resume for ~2 minutes.
     var resumableSession: ResumableSession?
+    /// Last created session, persisted so we can resume/stop it across app launches.
+    var lastSession: LastSessionRecord?
+    /// Top 5 lowest-latency zones, populated on launch.
+    var topZones: [GFNZone] = []
 
     private let gamesClient = GamesClient()
     private let cloudMatchClient = CloudMatchClient()
@@ -60,6 +73,11 @@ class GamesViewModel {
            let settings = try? JSONDecoder().decode(StreamSettings.self, from: data)
         {
             streamSettings = settings
+        }
+        if let data = UserDefaults.standard.data(forKey: "gfn.lastSession"),
+           let session = try? JSONDecoder().decode(LastSessionRecord.self, from: data)
+        {
+            lastSession = session
         }
         // tvOS currently caps at 60 Hz; clamp any saved value to the screen maximum.
         // If Apple raises the cap in a future tvOS release this will automatically unlock.
@@ -127,62 +145,82 @@ class GamesViewModel {
 
     // MARK: Load
 
+    private static let libraryCacheKey = "gfn.cache.libraryGames.v2"
+
     func load(authManager: AuthManager) async {
-        isLoading = true
-        isLibraryLoading = true
+        // Invalidate stale v1 cache from the old panels API
+        UserDefaults.standard.removeObject(forKey: "gfn.cache.mainGames")
+        UserDefaults.standard.removeObject(forKey: "gfn.cache.libraryGames")
+
+        // Show cached library instantly (catalog is too large to cache)
+        if libraryGames.isEmpty, let cached = loadCache(Self.libraryCacheKey, as: [GameInfo].self) {
+            libraryGames = cached
+        }
+        let hadCache = !libraryGames.isEmpty
+        isLoading = !hadCache
         error = nil
         libraryError = nil
-        libraryWarning = nil
+
         do {
+            let token = try await authManager.resolveToken()
             let streamingUrl = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
             let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
 
-            // Keep automatic routing ready without putting worldwide probes on the launch path.
-            Task { await ZoneClient.shared.prewarmAutomaticRouting() }
+            // Fetch main games, library, active sessions, and subscription in parallel
+            async let mainTask = gamesClient.fetchMainGames(token: token, streamingBaseUrl: base)
+            async let libraryTask = fetchLibrarySafe(token: token, base: base)
+            async let sessionsTask = fetchSessionsSafe(token: token, base: base)
+            async let subTask = fetchSubscriptionSafe(authManager: authManager, token: token, base: base)
 
-            async let mainLoad: Void = loadMainGames(authManager: authManager, base: base)
-            async let libraryLoad: Void = loadLibraryGames(authManager: authManager, base: base)
-            _ = await (mainLoad, libraryLoad)
-
-            let token = try await authManager.resolveToken()
-
-            // Non-fatal — may fail if no active sessions or server returns 404
-            activeSessions = await (try? cloudMatchClient.getActiveSessions(token: token, base: base)) ?? []
-
-            // Non-fatal — fetch subscription tier and entitled resolutions
-            if let userId = authManager.session?.user.userId {
-                let vpcId = await (try? MESClient.shared.fetchVpcId(token: token, base: base)) ?? ""
-                let sub = try? await MESClient.shared.fetchSubscription(token: token, vpcId: vpcId, userId: userId)
-                print("[MES] tier=\(sub?.membershipTier ?? "nil") resolutions=\(sub?.entitledResolutions.map(\.resolutionLabel) ?? [])")
+            let fetchedMain = try await mainTask
+            let panelLibrary = await libraryTask
+            activeSessions = await sessionsTask
+            let sub = await subTask
+            if let sub {
+                print("[MES] tier=\(sub.membershipTier ?? "nil") resolutions=\(sub.entitledResolutions.map(\.resolutionLabel))")
                 subscription = sub
             }
+
+            mainGames = fetchedMain
+            let catalogOwned = fetchedMain.filter(\.isInLibrary)
+            var merged = panelLibrary
+            var seen = Set(panelLibrary.map(\.id))
+            for game in catalogOwned where seen.insert(game.id).inserted {
+                merged.append(game)
+            }
+            libraryGames = merged
+
+            // Only cache library (small); catalog is too large for tvOS UserDefaults
+            saveCache(Self.libraryCacheKey, data: merged)
         } catch {
-            self.error = error.localizedDescription
+            if !hadCache { self.error = error.localizedDescription }
         }
         isLibraryLoading = false
         isLoading = false
     }
 
-    private func loadMainGames(authManager: AuthManager, base: String) async {
-        do {
-            mainGames = try await fetchWithAuthRetry(authManager: authManager) { token in
-                try await gamesClient.fetchMainGames(token: token, streamingBaseUrl: base)
-            }
-        } catch {
-            self.error = error.localizedDescription
-        }
+    private func fetchLibrarySafe(token: String, base: String) async -> [GameInfo] {
+        await (try? gamesClient.fetchLibrary(token: token, streamingBaseUrl: base)) ?? []
     }
 
-    private func loadLibraryGames(authManager: AuthManager, base: String) async {
-        defer { isLibraryLoading = false }
-        do {
-            let result = try await fetchWithAuthRetry(authManager: authManager) { token in
-                try await gamesClient.fetchLibrary(token: token, streamingBaseUrl: base)
-            }
-            libraryGames = result.games
-            libraryWarning = result.warning
-        } catch {
-            libraryError = error.localizedDescription
+    private func fetchSessionsSafe(token: String, base: String) async -> [ActiveSessionInfo] {
+        await (try? cloudMatchClient.getActiveSessions(token: token, base: base)) ?? []
+    }
+
+    private func fetchSubscriptionSafe(authManager: AuthManager, token: String, base: String) async -> SubscriptionInfo? {
+        guard let userId = authManager.session?.user.userId else { return nil }
+        let vpcId = await (try? MESClient.shared.fetchVpcId(token: token, base: base)) ?? ""
+        return try? await MESClient.shared.fetchSubscription(token: token, vpcId: vpcId, userId: userId)
+    }
+
+    private func loadCache<T: Decodable>(_ key: String, as type: T.Type) -> T? {
+        guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
+    }
+
+    private func saveCache(_ key: String, data: some Encodable) {
+        if let encoded = try? JSONEncoder().encode(data) {
+            UserDefaults.standard.set(encoded, forKey: key)
         }
     }
 
@@ -190,32 +228,16 @@ class GamesViewModel {
         guard !isLibraryLoading else { return }
         isLibraryLoading = true
         libraryError = nil
-        libraryWarning = nil
         defer { isLibraryLoading = false }
 
         do {
+            let token = try await authManager.resolveToken()
             let streamingUrl = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
             let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
-            let result = try await fetchWithAuthRetry(authManager: authManager) { token in
-                try await gamesClient.fetchLibrary(token: token, streamingBaseUrl: base)
-            }
-            libraryGames = result.games
-            libraryWarning = result.warning
+            libraryGames = try await gamesClient.fetchLibrary(token: token, streamingBaseUrl: base)
+            saveCache(Self.libraryCacheKey, data: libraryGames)
         } catch {
             libraryError = error.localizedDescription
-        }
-    }
-
-    private func fetchWithAuthRetry<T>(
-        authManager: AuthManager,
-        operation: (String) async throws -> T
-    ) async throws -> T {
-        let token = try await authManager.resolveToken()
-        do {
-            return try await operation(token)
-        } catch GamesError.unauthorized {
-            let refreshedToken = try await authManager.resolveToken(rejecting: token)
-            return try await operation(refreshedToken)
         }
     }
 
@@ -283,5 +305,86 @@ class GamesViewModel {
     func saveSettings() {
         let data = try? JSONEncoder().encode(streamSettings)
         UserDefaults.standard.set(data, forKey: "gfn.streamSettings")
+    }
+
+    func saveLastSession(_ record: LastSessionRecord) {
+        lastSession = record
+        let data = try? JSONEncoder().encode(record)
+        UserDefaults.standard.set(data, forKey: "gfn.lastSession")
+    }
+
+    func clearLastSession() {
+        lastSession = nil
+        UserDefaults.standard.removeObject(forKey: "gfn.lastSession")
+    }
+
+    // MARK: Zone Auto-Selection
+
+    func measureTopZones() async {
+        guard let zones = try? await ZoneClient.shared.fetchZones() else { return }
+        var measured = zones
+        await withTaskGroup(of: (String, Int?).self) { group in
+            for zone in zones {
+                group.addTask {
+                    let ping = await ZoneClient.shared.measurePing(to: zone.zoneUrl)
+                    return (zone.id, ping)
+                }
+            }
+            for await (id, ping) in group {
+                if let idx = measured.firstIndex(where: { $0.id == id }) {
+                    measured[idx].pingMs = ping
+                    measured[idx].isMeasuring = false
+                }
+            }
+        }
+        let reachable = measured.filter { $0.pingMs != nil }
+        let isUnlimited = subscription?.isUnlimited ?? false
+        topZones = Array(reachable
+            .sorted { autoZoneScore($0, maxPing: reachable, maxQueue: reachable, isUnlimited: isUnlimited) <
+                autoZoneScore($1, maxPing: reachable, maxQueue: reachable, isUnlimited: isUnlimited)
+            }
+            .prefix(5))
+        print("[Zones] top 5: \(topZones.map { "\($0.id) ping=\($0.pingMs!)ms queue=\($0.queuePosition)" }.joined(separator: ", "))")
+    }
+
+    func bestZoneUrl() async -> String? {
+        guard !topZones.isEmpty else { return nil }
+        // Re-ping candidates and refresh queue data for current conditions
+        var refreshed = topZones
+        if let freshZones = try? await ZoneClient.shared.fetchZones() {
+            let queueLookup = Dictionary(uniqueKeysWithValues: freshZones.map { ($0.id, $0.queuePosition) })
+            for i in refreshed.indices {
+                if let q = queueLookup[refreshed[i].id] {
+                    refreshed[i].queuePosition = q
+                }
+            }
+        }
+        await withTaskGroup(of: (String, Int?).self) { group in
+            for zone in refreshed {
+                group.addTask {
+                    let ping = await ZoneClient.shared.measurePing(to: zone.zoneUrl)
+                    return (zone.id, ping)
+                }
+            }
+            for await (id, ping) in group {
+                if let idx = refreshed.firstIndex(where: { $0.id == id }) {
+                    refreshed[idx].pingMs = ping
+                }
+            }
+        }
+        let reachable = refreshed.filter { $0.pingMs != nil }
+        let isUnlimited = subscription?.isUnlimited ?? false
+        let best = reachable.autoZone(isUnlimited: isUnlimited)
+        if let best {
+            print("[Zones] best at launch: \(best.zoneUrl) (ping=\(best.pingMs!)ms queue=\(best.queuePosition), unlimited=\(isUnlimited))")
+        }
+        return best?.zoneUrl
+    }
+
+    private func autoZoneScore(_ zone: GFNZone, maxPing: [GFNZone], maxQueue: [GFNZone], isUnlimited: Bool) -> Double {
+        if isUnlimited { return Double(zone.pingMs ?? .max) }
+        let mp = Double(Swift.max(maxPing.compactMap(\.pingMs).max() ?? 1, 1))
+        let mq = Double(Swift.max(maxQueue.map(\.queuePosition).max() ?? 1, 1))
+        return (Double(zone.pingMs ?? Int(mp)) / mp) * 0.4 + (Double(zone.queuePosition) / mq) * 0.6
     }
 }

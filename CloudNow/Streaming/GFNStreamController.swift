@@ -7,6 +7,9 @@ import AVFoundation
 import Foundation
 @preconcurrency import LiveKitWebRTC
 import Observation
+import os.log
+
+private let gfnLog = Logger(subsystem: "com.owenselles.CloudNow2", category: "GFNStream")
 
 // MARK: - Session Time Warning
 
@@ -24,8 +27,10 @@ enum StreamState: Equatable {
     case idle
     case connecting
     case streaming
+    case reconnecting(attempt: Int)
     case disconnected(reason: String)
     case failed(message: String)
+    case sessionEnded
 }
 
 // MARK: - Stream Statistics
@@ -117,6 +122,11 @@ final class GFNStreamController: NSObject {
     private var inputReady = false
     private var lastBytesReceived: Double = 0
     private var lastStatsTime: Date = .distantPast
+    private var wasStreaming = false
+    private var reconnectAttempt = 0
+    private static let maxReconnectAttempts = 3
+    /// Set by the caller to enable auto-reconnect on ICE disconnect.
+    var onReconnectNeeded: (() async -> SessionInfo?)?
     private var previousSelectedCandidatePairId = ""
     private var lastZoneRttFeedbackAt: Date?
 
@@ -132,9 +142,12 @@ final class GFNStreamController: NSObject {
     func connect(session: SessionInfo, settings: StreamSettings) async {
         // Block if already active; allow from idle, disconnected, or failed (retry case)
         switch state {
-        case .connecting, .streaming: return
+        case .connecting, .streaming:
+            gfnLog.info("connect: already \(String(describing: state)), ignoring")
+            return
         default: break
         }
+        gfnLog.info("connect: starting, serverIp=\(session.serverIp), signalingUrl=\(session.signalingUrl ?? "nil")")
         state = .connecting
         sessionInfo = session
         self.settings = settings
@@ -155,8 +168,11 @@ final class GFNStreamController: NSObject {
 
         setupSignaling(session: session)
         do {
+            gfnLog.info("connect: opening signaling WebSocket")
             try await signaling?.connect()
+            gfnLog.info("connect: signaling connected")
         } catch {
+            gfnLog.error("connect: signaling FAILED: \(error)")
             state = .failed(message: error.localizedDescription)
         }
     }
@@ -198,6 +214,8 @@ final class GFNStreamController: NSObject {
 
     func disconnect() {
         statsTimer?.invalidate()
+        wasStreaming = false
+        reconnectAttempt = 0
         statsTimer = nil
         inputSender?.stop()
         signaling?.disconnect()
@@ -232,6 +250,68 @@ final class GFNStreamController: NSObject {
         menuPressCount = 0
         timeWarning = nil
         state = .idle
+    }
+
+    // MARK: Auto-Reconnect
+
+    private func attemptReconnect() {
+        reconnectAttempt += 1
+        let attempt = reconnectAttempt
+        gfnLog.info("attemptReconnect: attempt \(attempt)/\(Self.maxReconnectAttempts)")
+
+        guard attempt <= Self.maxReconnectAttempts, onReconnectNeeded != nil else {
+            gfnLog.info("attemptReconnect: giving up, showing sessionEnded")
+            state = .sessionEnded
+            return
+        }
+
+        state = .reconnecting(attempt: attempt)
+
+        // Tear down current peer connection before reconnecting
+        inputSender?.stop()
+        signaling?.disconnect()
+        peerConnection?.close()
+        peerConnection = nil
+        inputDataChannel = nil
+        partiallyReliableDataChannel = nil
+        reliableSendChannel = nil
+        controlChannel = nil
+        videoTrack = nil
+        micAudioTrack = nil
+        micAudioSource = nil
+        signalingComplete = false
+        inputReady = false
+
+        let delays: [TimeInterval] = [0.5, 1.0, 2.0]
+        let delay = delays[min(attempt - 1, delays.count - 1)]
+
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard let self else { return }
+            guard case .reconnecting = state else { return }
+
+            guard let reclaim = onReconnectNeeded,
+                  let session = await reclaim()
+            else {
+                gfnLog.info("attemptReconnect: reclaim failed on attempt \(attempt)")
+                if attempt >= Self.maxReconnectAttempts {
+                    state = .sessionEnded
+                }
+                return
+            }
+
+            gfnLog.info("attemptReconnect: reclaimed session, reconnecting WebRTC")
+            sessionInfo = session
+            setupSignaling(session: session)
+            do {
+                try await signaling?.connect()
+            } catch {
+                gfnLog.error("attemptReconnect: signaling failed: \(error)")
+                if attempt >= Self.maxReconnectAttempts {
+                    state = .sessionEnded
+                }
+            }
+        }
     }
 
     // MARK: Private — Signaling Setup
@@ -816,18 +896,29 @@ extension GFNStreamController: LKRTCPeerConnectionDelegate {
         }
         print("[ICE] State → \(name)")
         Task { @MainActor [weak self] in
+            guard let self else { return }
             switch newState {
             case .connected, .completed:
-                self?.state = .streaming
-                self?.startStatsTimer()
+                wasStreaming = true
+                reconnectAttempt = 0
+                state = .streaming
+                startStatsTimer()
             case .disconnected:
-                self?.statsTimer?.invalidate()
-                self?.statsTimer = nil
-                self?.state = .disconnected(reason: "ICE disconnected")
+                statsTimer?.invalidate()
+                statsTimer = nil
+                if wasStreaming {
+                    attemptReconnect()
+                } else {
+                    state = .disconnected(reason: "ICE disconnected")
+                }
             case .failed:
-                self?.statsTimer?.invalidate()
-                self?.statsTimer = nil
-                self?.state = .failed(message: "ICE connection failed")
+                statsTimer?.invalidate()
+                statsTimer = nil
+                if wasStreaming {
+                    attemptReconnect()
+                } else {
+                    state = .failed(message: "ICE connection failed")
+                }
             default:
                 break
             }

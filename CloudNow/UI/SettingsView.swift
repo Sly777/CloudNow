@@ -306,7 +306,10 @@ private struct ZonePickerView: View {
             + grouped.keys.filter { !order.contains($0) }.sorted()
         return sortedRegions.map { region in
             let meta = GFNZone.regionMeta[region] ?? (label: region, flag: "🌐")
-            return (region, meta.label, meta.flag, grouped[region, default: []])
+            let sorted = grouped[region, default: []].sorted {
+                ($0.pingMs ?? .max) < ($1.pingMs ?? .max)
+            }
+            return (region, meta.label, meta.flag, sorted)
         }
     }
 
@@ -328,8 +331,7 @@ private struct ZonePickerView: View {
                         // Auto option
                         Section {
                             Button {
-                                selectedZoneUrl = nil
-                                dismiss()
+                                select(nil)
                             } label: {
                                 HStack {
                                     VStack(alignment: .leading) {
@@ -355,8 +357,7 @@ private struct ZonePickerView: View {
                             Section("\(group.flag) \(group.label)") {
                                 ForEach(group.zones) { zone in
                                     Button {
-                                        selectedZoneUrl = zone.zoneUrl
-                                        dismiss()
+                                        select(zone.zoneUrl)
                                     } label: {
                                         HStack {
                                             VStack(alignment: .leading, spacing: 2) {
@@ -402,15 +403,22 @@ private struct ZonePickerView: View {
         }
     }
 
+    private func select(_ url: String?) {
+        selectedZoneUrl = url
+        Task { @MainActor in
+            dismiss()
+        }
+    }
+
     private func loadZones() async {
         isLoading = true
         error = nil
         do {
             zones = try await ZoneClient.shared.fetchZones()
             isLoading = false
-            // Measure pings concurrently in batches of 6
             let batchSize = 6
             for start in stride(from: 0, to: zones.count, by: batchSize) {
+                if Task.isCancelled { return }
                 let end = min(start + batchSize, zones.count)
                 let batch = zones[start ..< end]
                 await withTaskGroup(of: (String, Int?).self) { group in
@@ -421,6 +429,7 @@ private struct ZonePickerView: View {
                         }
                     }
                     for await (id, ping) in group {
+                        if Task.isCancelled { return }
                         if let idx = zones.firstIndex(where: { $0.id == id }) {
                             zones[idx].pingMs = ping
                             zones[idx].isMeasuring = false
