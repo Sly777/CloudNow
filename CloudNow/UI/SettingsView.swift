@@ -428,6 +428,7 @@ private struct ZonePickerView: View {
                     }
                 }
             }
+            await ZoneClient.shared.cacheAutomaticSelections(from: zones)
         } catch {
             isLoading = false
             self.error = error.localizedDescription

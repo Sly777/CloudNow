@@ -137,6 +137,9 @@ class GamesViewModel {
             let streamingUrl = authManager.session?.provider.streamingServiceUrl ?? NVIDIAAuth.defaultStreamingUrl
             let base = streamingUrl.hasSuffix("/") ? String(streamingUrl.dropLast()) : streamingUrl
 
+            // Keep automatic routing ready without putting worldwide probes on the launch path.
+            Task { await ZoneClient.shared.prewarmAutomaticRouting() }
+
             async let mainLoad: Void = loadMainGames(authManager: authManager, base: base)
             async let libraryLoad: Void = loadLibraryGames(authManager: authManager, base: base)
             _ = await (mainLoad, libraryLoad)

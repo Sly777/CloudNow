@@ -40,6 +40,15 @@ struct StreamStats {
     var jitterMs: Double = 0
     var codec: String = ""
     var gpuType: String = ""
+    var selectedCandidatePairId: String = ""
+    var selectedProtocol: String = ""
+    var localCandidateType: String = ""
+    var remoteCandidateType: String = ""
+    var localCandidateAddress: String = ""
+    var remoteCandidateAddress: String = ""
+    var availableIncomingBitrateKbps: Int = 0
+    var candidatePairChanges: Int = 0
+    var selectedNetworkPath: String = "Unknown"
     var inputGenerated: UInt64 = 0
     var inputSubmitted: UInt64 = 0
     var inputAccepted: UInt64 = 0
@@ -50,7 +59,6 @@ struct StreamStats {
     var inputQueueMaxMs: Double = 0
     var newestGamepadAgeMs: Double = 0
     var inputChannelState: String = "closed"
-    var selectedNetworkPath: String = "Unknown"
 }
 
 // MARK: - GFNStreamController
@@ -109,6 +117,8 @@ final class GFNStreamController: NSObject {
     private var inputReady = false
     private var lastBytesReceived: Double = 0
     private var lastStatsTime: Date = .distantPast
+    private var previousSelectedCandidatePairId = ""
+    private var lastZoneRttFeedbackAt: Date?
 
     private static let factory: LKRTCPeerConnectionFactory = {
         LKRTCInitializeSSL()
@@ -128,6 +138,7 @@ final class GFNStreamController: NSObject {
         state = .connecting
         sessionInfo = session
         self.settings = settings
+        stats = StreamStats()
         stats.gpuType = session.gpuType ?? ""
         inputSendQueue.sync {
             inputGenerated = 0
@@ -187,6 +198,7 @@ final class GFNStreamController: NSObject {
 
     func disconnect() {
         statsTimer?.invalidate()
+        statsTimer = nil
         inputSender?.stop()
         signaling?.disconnect()
         peerConnection?.close()
@@ -211,6 +223,8 @@ final class GFNStreamController: NSObject {
         inputReady = false
         lastBytesReceived = 0
         lastStatsTime = .distantPast
+        previousSelectedCandidatePairId = ""
+        lastZoneRttFeedbackAt = nil
         videoView?.inputHandler = nil
         videoView?.menuPressHandler = nil
         videoView = nil
@@ -264,8 +278,10 @@ final class GFNStreamController: NSObject {
 
     private func handleOffer(sdp: String) async {
         guard let session = sessionInfo else { return }
-        print("[Stream] Offer SDP (\(sdp.count) chars):")
-        sdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
+        #if DEBUG
+            print("[Stream] Offer SDP (\(sdp.count) chars):")
+            sdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
+        #endif
 
         // Configure audio session for real-time streaming before creating the peer connection.
         // .playback + .moviePlayback gives the lowest latency path; allowBluetooth covers
@@ -388,8 +404,10 @@ final class GFNStreamController: NSObject {
                 ? SDPMunger.rewriteH265LevelId(SDPMunger.rewriteH265TierFlag(codecFilteredSdp))
                 : codecFilteredSdp
             let mangledAnswerSdp = SDPMunger.injectBandwidth(h265SafeSdp, videoKbps: settings.maxBitrateKbps)
-            print("[Stream] Answer SDP (\(mangledAnswerSdp.count) chars):")
-            mangledAnswerSdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
+            #if DEBUG
+                print("[Stream] Answer SDP (\(mangledAnswerSdp.count) chars):")
+                mangledAnswerSdp.components(separatedBy: "\r\n").forEach { print("  \($0)") }
+            #endif
 
             // Set local description
             let localSDP = LKRTCSessionDescription(type: .answer, sdp: mangledAnswerSdp)
@@ -587,8 +605,9 @@ final class GFNStreamController: NSObject {
     // MARK: Private — Stats
 
     private func startStatsTimer() {
+        guard statsTimer == nil else { return }
         statsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.collectStats()
+            Task { @MainActor [weak self] in self?.collectStats() }
         }
     }
 
@@ -653,30 +672,7 @@ final class GFNStreamController: NSObject {
             }
         }
 
-        var candidateDetails: [String: (protocolName: String, candidateType: String)] = [:]
-        var candidatePairs: [String: (localID: String, remoteID: String, rttMs: Double, nominated: Bool)] = [:]
-        var selectedCandidatePairID: String?
-
-        for (id, stat) in report.statistics {
-            if stat.type == "local-candidate" || stat.type == "remote-candidate" {
-                candidateDetails[id] = (
-                    protocolName: (stat.values["protocol"] as? String ?? "").lowercased(),
-                    candidateType: (stat.values["candidateType"] as? String ?? "").lowercased()
-                )
-            } else if stat.type == "transport" {
-                selectedCandidatePairID = stat.values["selectedCandidatePairId"] as? String
-                    ?? selectedCandidatePairID
-            } else if stat.type == "candidate-pair",
-                      stat.values["state"] as? String == "succeeded"
-            {
-                candidatePairs[id] = (
-                    localID: stat.values["localCandidateId"] as? String ?? "",
-                    remoteID: stat.values["remoteCandidateId"] as? String ?? "",
-                    rttMs: (stat.values["currentRoundTripTime"] as? Double ?? 0) * 1000,
-                    nominated: stat.values["nominated"] as? Bool ?? false
-                )
-            }
-
+        for (_, stat) in report.statistics {
             if stat.type == "inbound-rtp", stat.values["kind"] as? String == "video" {
                 let bytesReceived = stat.values["bytesReceived"] as? Double ?? 0
                 let framesReceived = stat.values["framesReceived"] as? Double ?? 0
@@ -709,27 +705,7 @@ final class GFNStreamController: NSObject {
                 print("[Stats] framesReceived=\(Int(framesReceived)) framesDecoded=\(Int(framesDecoded)) fps=\(stats.fps) res=\(stats.resolutionWidth)×\(stats.resolutionHeight) bitrateKbps=\(stats.bitrateKbps) codec=\(stats.codec)")
             }
         }
-
-        let selectedPair = selectedCandidatePairID.flatMap { candidatePairs[$0] }
-            ?? candidatePairs.values.first(where: \.nominated)
-        if let selectedPair {
-            stats.rttMs = selectedPair.rttMs
-            let local = candidateDetails[selectedPair.localID]
-            let remote = candidateDetails[selectedPair.remoteID]
-            let protocolName = local?.protocolName.isEmpty == false
-                ? local?.protocolName ?? ""
-                : remote?.protocolName ?? ""
-            let usesRelay = local?.candidateType == "relay" || remote?.candidateType == "relay"
-            if protocolName == "tcp" || protocolName == "tls" {
-                stats.selectedNetworkPath = "TCP/TLS fallback"
-            } else if usesRelay, protocolName == "udp" {
-                stats.selectedNetworkPath = "TURN/UDP relay"
-            } else if protocolName == "udp" {
-                stats.selectedNetworkPath = "Direct UDP"
-            } else {
-                stats.selectedNetworkPath = "Unknown"
-            }
-        }
+        parseSelectedConnectionStats(report)
         appendHistory(&pingHistory, value: stats.rttMs)
         appendHistory(&fpsHistory, value: stats.fps)
         appendHistory(&bitrateHistory, value: Double(stats.bitrateKbps) / 1000.0)
@@ -738,6 +714,79 @@ final class GFNStreamController: NSObject {
     private func appendHistory(_ history: inout [Double], value: Double) {
         if history.count >= 30 { history.removeFirst() }
         history.append(value)
+    }
+
+    private func parseSelectedConnectionStats(_ report: LKRTCStatisticsReport) {
+        let transport = report.statistics.values.first { $0.type == "transport" }
+        let selectedPairId = transport?.values["selectedCandidatePairId"] as? String
+        let succeededPairs = report.statistics.values.filter {
+            $0.type == "candidate-pair" && $0.values["state"] as? String == "succeeded"
+        }
+        let selectedPair = selectedPairId.flatMap { report.statistics[$0] }
+            ?? succeededPairs.first(where: { ($0.values["nominated"] as? NSNumber)?.boolValue == true })
+            ?? succeededPairs.first
+        guard let selectedPair else { return }
+
+        let localId = selectedPair.values["localCandidateId"] as? String
+        let remoteId = selectedPair.values["remoteCandidateId"] as? String
+        let local = localId.flatMap { report.statistics[$0] }
+        let remote = remoteId.flatMap { report.statistics[$0] }
+        let pairId = selectedPair.id
+
+        if !previousSelectedCandidatePairId.isEmpty, previousSelectedCandidatePairId != pairId {
+            stats.candidatePairChanges += 1
+            print("[ICE] Selected pair changed: \(previousSelectedCandidatePairId) -> \(pairId)")
+        }
+        previousSelectedCandidatePairId = pairId
+
+        stats.selectedCandidatePairId = pairId
+        stats.rttMs = numericValue(selectedPair.values["currentRoundTripTime"]) * 1000
+        stats.availableIncomingBitrateKbps = Int(
+            numericValue(selectedPair.values["availableIncomingBitrate"]) / 1000
+        )
+        let localProtocol = local?.values["protocol"] as? String ?? ""
+        let remoteProtocol = remote?.values["protocol"] as? String ?? ""
+        stats.selectedProtocol = localProtocol.isEmpty ? remoteProtocol : localProtocol
+        stats.localCandidateType = local?.values["candidateType"] as? String ?? ""
+        stats.remoteCandidateType = remote?.values["candidateType"] as? String ?? ""
+        stats.localCandidateAddress = candidateAddress(local)
+        stats.remoteCandidateAddress = candidateAddress(remote)
+        let protocolName = stats.selectedProtocol.lowercased()
+        let usesRelay = stats.localCandidateType.lowercased() == "relay"
+            || stats.remoteCandidateType.lowercased() == "relay"
+        if protocolName == "tcp" || protocolName == "tls" {
+            stats.selectedNetworkPath = "TCP/TLS fallback"
+        } else if usesRelay, protocolName == "udp" {
+            stats.selectedNetworkPath = "TURN/UDP relay"
+        } else if protocolName == "udp" {
+            stats.selectedNetworkPath = "Direct UDP"
+        } else {
+            stats.selectedNetworkPath = "Unknown"
+        }
+
+        let now = Date()
+        if stats.rttMs > 0,
+           lastZoneRttFeedbackAt.map({ now.timeIntervalSince($0) >= 30 }) ?? true,
+           let zoneUrl = sessionInfo?.zone,
+           !zoneUrl.isEmpty
+        {
+            lastZoneRttFeedbackAt = now
+            let rttMs = stats.rttMs
+            Task { await ZoneClient.shared.recordSessionRtt(zoneUrl: zoneUrl, rttMs: rttMs) }
+        }
+    }
+
+    private func candidateAddress(_ candidate: LKRTCStatistics?) -> String {
+        guard let candidate else { return "" }
+        let address = candidate.values["address"] as? String
+            ?? candidate.values["ip"] as? String
+            ?? ""
+        let port = Int(numericValue(candidate.values["port"]))
+        return port > 0 ? "\(address):\(port)" : address
+    }
+
+    private func numericValue(_ value: Any?) -> Double {
+        (value as? NSNumber)?.doubleValue ?? 0
     }
 }
 
