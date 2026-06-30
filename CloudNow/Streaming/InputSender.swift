@@ -505,7 +505,6 @@ final class InputSender {
                 notifyRemoteModeChanged()
             }
 
-            advertiseHaptics(rumbleEnabled && !haptics.isEmpty)
             lastHeartbeat = DispatchTime.now().uptimeNanoseconds
             let timer = DispatchSource.makeTimerSource(queue: inputQueue)
             timer.schedule(
@@ -516,6 +515,10 @@ final class InputSender {
             timer.setEventHandler { [weak self] in self?.tick() }
             sampler = timer
             timer.resume()
+            inputQueue.asyncAfter(deadline: .now() + .milliseconds(250)) { [weak self] in
+                guard let self, sampler != nil else { return }
+                advertiseHaptics(rumbleEnabled && !haptics.isEmpty)
+            }
         }
         GCController.startWirelessControllerDiscovery()
     }
