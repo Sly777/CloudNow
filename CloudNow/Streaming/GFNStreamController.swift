@@ -141,6 +141,7 @@ final class GFNStreamController: NSObject {
     private var peerConnection: LKRTCPeerConnection?
     private var inputDataChannel: LKRTCDataChannel?
     @ObservationIgnored private nonisolated(unsafe) var reliableSendChannel: LKRTCDataChannel?
+    @ObservationIgnored private nonisolated(unsafe) var partiallyReliableSendChannel: LKRTCDataChannel?
     @ObservationIgnored private nonisolated(unsafe) var rumbleSink: ((Int, UInt16, UInt16) -> Void)?
     @ObservationIgnored private nonisolated(unsafe) var inputGenerated: UInt64 = 0
     @ObservationIgnored private nonisolated(unsafe) var inputSubmitted: UInt64 = 0
@@ -336,6 +337,7 @@ final class GFNStreamController: NSObject {
         inputDataChannel = nil
         inputSendQueue.sync {
             reliableSendChannel = nil
+            partiallyReliableSendChannel = nil
             let pending = Array(pendingGamepadSnapshots.values)
             pendingGamepadSnapshots.removeAll()
             inputDropped &+= UInt64(pending.count)
@@ -390,6 +392,7 @@ final class GFNStreamController: NSObject {
         inputDataChannel = nil
         partiallyReliableDataChannel = nil
         reliableSendChannel = nil
+        partiallyReliableSendChannel = nil
         controlChannel = nil
         videoTrack = nil
         micAudioTrack = nil
@@ -542,6 +545,8 @@ final class GFNStreamController: NSObject {
         prConfig.isNegotiated = false
         if let dc = pc.dataChannel(forLabel: "input_channel_partially_reliable", configuration: prConfig) {
             partiallyReliableDataChannel = dc
+            partiallyReliableSendChannel = dc
+            dc.delegate = self
         }
 
         // Attach microphone audio track if enabled (must happen before answer creation
@@ -1338,7 +1343,7 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
     }
 
     nonisolated func dataChannel(_ dataChannel: LKRTCDataChannel, didChangeBufferedAmount amount: UInt64) {
-        guard dataChannel.label == "input_channel_v1" else { return }
+        guard dataChannel.label == "input_channel_v1" || dataChannel.label == "input_channel_partially_reliable" else { return }
         inputSendQueue.async { [weak self] in
             guard let self else { return }
             inputBufferedBytes = amount
@@ -1448,7 +1453,7 @@ extension GFNStreamController: DataChannelSender {
             }
             inputGenerated &+= 1
 
-            guard let dc = reliableSendChannel, dc.readyState == .open else {
+            guard let dc = sendChannel(for: packet), dc.readyState == .open else {
                 inputDropped &+= 1
                 completion(.channelUnavailable)
                 return
@@ -1470,6 +1475,16 @@ extension GFNStreamController: DataChannelSender {
             sendImmediately(packet, completion: completion, on: dc)
             drainPendingGamepadSnapshotsIfPossible(on: dc)
         }
+    }
+
+    private nonisolated func sendChannel(for packet: EncodedInputPacket) -> LKRTCDataChannel? {
+        if packet.category == .gamepadSnapshot,
+           let dataChannel = partiallyReliableSendChannel,
+           dataChannel.readyState == .open
+        {
+            return dataChannel
+        }
+        return reliableSendChannel
     }
 
     private nonisolated func sendImmediately(
@@ -1509,6 +1524,11 @@ extension GFNStreamController: DataChannelSender {
     private nonisolated func drainPendingGamepadSnapshotsIfPossible(on dataChannel: LKRTCDataChannel) {
         guard dataChannel.readyState == .open,
               dataChannel.bufferedAmount <= inputBackpressureLowWaterBytes else { return }
+        if dataChannel.label == "input_channel_v1",
+           partiallyReliableSendChannel?.readyState == .open
+        {
+            return
+        }
         for slot in pendingGamepadSnapshots.keys.sorted() {
             guard dataChannel.bufferedAmount <= inputBackpressureHighWaterBytes,
                   let pending = pendingGamepadSnapshots.removeValue(forKey: slot) else { break }
