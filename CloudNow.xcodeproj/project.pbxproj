@@ -10,8 +10,19 @@
 		5A6F3F582F8A5EB600C9DB31 /* LiveKitWebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 5A6F3F572F8A5EB600C9DB31 /* LiveKitWebRTC */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		EB2FD1CAEEA574C029F33496 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 5A6F3F292F8A5B1C00C9DB31 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5A6F3F302F8A5B1C00C9DB31;
+			remoteInfo = CloudNow;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		5A6F3F312F8A5B1C00C9DB31 /* CloudNow.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CloudNow.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1E4ED58A3DBBAB1E3D0791F5 /* CloudNowTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CloudNowTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -33,6 +44,11 @@
 			path = CloudNow;
 			sourceTree = "<group>";
 		};
+		AFEAC03F6E95864FF658FF4C /* CloudNowTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = CloudNowTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -44,6 +60,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F547843BA07D753E1ADEAEE6 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -51,6 +74,7 @@
 			isa = PBXGroup;
 			children = (
 				5A6F3F332F8A5B1C00C9DB31 /* CloudNow */,
+				AFEAC03F6E95864FF658FF4C /* CloudNowTests */,
 				5A6F3F322F8A5B1C00C9DB31 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -59,6 +83,7 @@
 			isa = PBXGroup;
 			children = (
 				5A6F3F312F8A5B1C00C9DB31 /* CloudNow.app */,
+				1E4ED58A3DBBAB1E3D0791F5 /* CloudNowTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -89,6 +114,27 @@
 			productReference = 5A6F3F312F8A5B1C00C9DB31 /* CloudNow.app */;
 			productType = "com.apple.product-type.application";
 		};
+		FB9EE16DDF536D04F1363992 /* CloudNowTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2D3493687CC3A22374764819 /* Build configuration list for PBXNativeTarget "CloudNowTests" */;
+			buildPhases = (
+				785E3AD6C4E69FC2C4F94CA5 /* Sources */,
+				F547843BA07D753E1ADEAEE6 /* Frameworks */,
+				BA045CA3362B85D1D2A788CC /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DBC664DD20B3FB585126BA4C /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AFEAC03F6E95864FF658FF4C /* CloudNowTests */,
+			);
+			name = CloudNowTests;
+			productName = CloudNowTests;
+			productReference = 1E4ED58A3DBBAB1E3D0791F5 /* CloudNowTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -101,6 +147,10 @@
 				TargetAttributes = {
 					5A6F3F302F8A5B1C00C9DB31 = {
 						CreatedOnToolsVersion = 26.4;
+					};
+					FB9EE16DDF536D04F1363992 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = 5A6F3F302F8A5B1C00C9DB31;
 					};
 				};
 			};
@@ -122,12 +172,20 @@
 			projectRoot = "";
 			targets = (
 				5A6F3F302F8A5B1C00C9DB31 /* CloudNow */,
+				FB9EE16DDF536D04F1363992 /* CloudNowTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		5A6F3F2F2F8A5B1C00C9DB31 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BA045CA3362B85D1D2A788CC /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -144,7 +202,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		785E3AD6C4E69FC2C4F94CA5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		DBC664DD20B3FB585126BA4C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 5A6F3F302F8A5B1C00C9DB31 /* CloudNow */;
+			targetProxy = EB2FD1CAEEA574C029F33496 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		5A6F3F3A2F8A5B1D00C9DB31 /* Debug */ = {
@@ -278,6 +351,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = QJBAS8766Q;
+				ENABLE_TESTABILITY = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = CloudNow/Info.plist;
@@ -315,6 +389,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = QJBAS8766Q;
+				ENABLE_TESTABILITY = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = CloudNow/Info.plist;
@@ -342,6 +417,46 @@
 			};
 			name = Release;
 		};
+		272F90D6E04119210CC54E6E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				ENABLE_TESTABILITY = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.owenselles.CloudNow2.CloudNowTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = appletvos;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CloudNow.app/CloudNow";
+				TVOS_DEPLOYMENT_TARGET = 26.4;
+			};
+			name = Debug;
+		};
+		7C4DE859D77622B5C884B1AD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				ENABLE_TESTABILITY = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.owenselles.CloudNow2.CloudNowTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = appletvos;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/CloudNow.app/CloudNow";
+				TVOS_DEPLOYMENT_TARGET = 26.4;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -359,6 +474,15 @@
 			buildConfigurations = (
 				5A6F3F3D2F8A5B1D00C9DB31 /* Debug */,
 				5A6F3F3E2F8A5B1D00C9DB31 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		2D3493687CC3A22374764819 /* Build configuration list for PBXNativeTarget "CloudNowTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				272F90D6E04119210CC54E6E /* Debug */,
+				7C4DE859D77622B5C884B1AD /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
