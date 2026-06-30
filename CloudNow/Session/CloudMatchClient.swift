@@ -171,7 +171,6 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
     let (width, height) = resolutionPixels(for: input.settings)
     let tzOffset = TimeZone.current.secondsFromGMT() * 1000
     let color = input.settings.colorRequest(localCapabilities: .detect(codec: input.settings.codec))
-    let trueHdr = false
 
     return [
         "sessionRequestData": [
@@ -226,19 +225,13 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
                 "bitDepth": cloudMatchBitDepth(color),
                 "cloudGsync": false,
                 "enabledL4S": input.settings.enableL4S,
-                "mouseMovementFlags": 0,
-                "trueHdr": trueHdr,
-                "supportedHidDevices": 0,
                 "profile": 0,
                 "fallbackToLogicalResolution": false,
-                "hidDevices": NSNull(),
-                "chromaFormat": cloudMatchChromaFormat(color),
+                "chromaFormat": color.bitDepth >= 10 ? 1 : 0,
                 "prefilterMode": 0,
                 "prefilterSharpness": 0,
                 "prefilterNoiseReduction": 0,
                 "hudStreamingMode": 0,
-                "sdrColorSpace": 2,
-                "hdrColorSpace": trueHdr ? 4 : 0,
             ],
         ],
     ]
