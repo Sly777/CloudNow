@@ -330,8 +330,9 @@ final class InputEncoder {
         buf[offset + 7] = UInt8(value & 0xFF)
     }
 
+    /// Monotonic microseconds since boot; GFN server rejects Unix-epoch magnitudes and exits the session.
     private func currentTimestamp() -> UInt64 {
-        UInt64(Date().timeIntervalSince1970 * 1_000_000)
+        DispatchTime.now().uptimeNanoseconds / 1000
     }
 }
 
@@ -505,6 +506,7 @@ final class InputSender {
                 notifyRemoteModeChanged()
             }
 
+            advertiseHaptics(rumbleEnabled && !haptics.isEmpty)
             lastHeartbeat = DispatchTime.now().uptimeNanoseconds
             let timer = DispatchSource.makeTimerSource(queue: inputQueue)
             timer.schedule(
@@ -515,10 +517,6 @@ final class InputSender {
             timer.setEventHandler { [weak self] in self?.tick() }
             sampler = timer
             timer.resume()
-            inputQueue.asyncAfter(deadline: .now() + .milliseconds(250)) { [weak self] in
-                guard let self, sampler != nil else { return }
-                advertiseHaptics(rumbleEnabled && !haptics.isEmpty)
-            }
         }
         GCController.startWirelessControllerDiscovery()
     }
