@@ -38,7 +38,7 @@ final class GFNSignalingClient {
     private var heartbeatTask: Task<Void, Never>?
     private var receiveTask: Task<Void, Never>?
     private var ackCounter = 0
-    private var localPeerId = 2
+    private var localPeerId = 0
     private var remotePeerId = 1
     private let peerName: String
     private(set) var connectedHost: String = ""
@@ -94,49 +94,19 @@ final class GFNSignalingClient {
         var winner: ConnectedCandidate?
         var lastError: Error?
 
-        let firstWave = Array(boundedCandidates.prefix(2))
-        if firstWave.count > 1 {
-            do {
-                winner = try await raceCandidates(
-                    firstWave,
-                    originalHost: host,
-                    components: comps,
-                    useTLS: useTLS,
-                    totalCount: boundedCandidates.count
-                )
-            } catch {
-                lastError = error
-            }
-        } else if let candidate = firstWave.first {
+        for (index, candidate) in boundedCandidates.enumerated() {
             do {
                 winner = try await connectCandidate(
                     candidate,
                     originalHost: host,
                     components: comps,
                     useTLS: useTLS,
-                    index: 0,
+                    index: index,
                     totalCount: boundedCandidates.count
                 )
+                break
             } catch {
                 lastError = error
-            }
-        }
-
-        if winner == nil {
-            for (offset, candidate) in boundedCandidates.dropFirst(firstWave.count).enumerated() {
-                do {
-                    winner = try await connectCandidate(
-                        candidate,
-                        originalHost: host,
-                        components: comps,
-                        useTLS: useTLS,
-                        index: firstWave.count + offset,
-                        totalCount: boundedCandidates.count
-                    )
-                    break
-                } catch {
-                    lastError = error
-                }
             }
         }
 
@@ -213,7 +183,7 @@ final class GFNSignalingClient {
                 "connected": true,
                 "id": localPeerId,
                 "name": peerName,
-                "peerRole": 1,
+                "peerRole": 0,
                 "resolution": resolution,
                 "version": 2,
             ],
@@ -388,42 +358,6 @@ final class GFNSignalingClient {
     private struct ConnectedCandidate {
         let host: String
         let connection: NWConnection
-    }
-
-    private func raceCandidates(
-        _ candidates: [String],
-        originalHost: String,
-        components: URLComponents,
-        useTLS: Bool,
-        totalCount: Int
-    ) async throws -> ConnectedCandidate {
-        var lastError: Error?
-        return try await withThrowingTaskGroup(of: ConnectedCandidate.self) { group in
-            for (index, candidate) in candidates.enumerated() {
-                group.addTask {
-                    try await self.connectCandidate(
-                        candidate,
-                        originalHost: originalHost,
-                        components: components,
-                        useTLS: useTLS,
-                        index: index,
-                        totalCount: totalCount
-                    )
-                }
-            }
-
-            while !group.isEmpty {
-                do {
-                    if let winner = try await group.next() {
-                        group.cancelAll()
-                        return winner
-                    }
-                } catch {
-                    lastError = error
-                }
-            }
-            throw lastError ?? SignalingError.handshakeFailed("Candidate race produced no winner")
-        }
     }
 
     private func connectCandidate(
