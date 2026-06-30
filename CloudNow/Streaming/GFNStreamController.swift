@@ -919,6 +919,10 @@ final class GFNStreamController: NSObject {
                 }
             }
         }
+
+        peerConnection.statistics { report in
+            streamStatsParsingQueue.async { Self.logMediaTransportProbe(report) }
+        }
     }
 
     private func collectInputStats() {
@@ -956,6 +960,25 @@ final class GFNStreamController: NSObject {
                 stats.inputQueueMaxMs = Double(maxNs) / 1_000_000
                 stats.newestGamepadAgeMs = Double(gamepadAgeNs) / 1_000_000
                 stats.inputChannelState = channelState
+            }
+        }
+    }
+
+    private nonisolated static func logMediaTransportProbe(_ report: LKRTCStatisticsReport) {
+        for (_, stat) in report.statistics {
+            switch stat.type {
+            case "transport":
+                let rx = (stat.values["bytesReceived"] as? NSNumber)?.intValue ?? -1
+                let pkts = (stat.values["packetsReceived"] as? NSNumber)?.intValue ?? -1
+                print("[MediaProbe] transport bytesReceived=\(rx) packetsReceived=\(pkts)")
+            case "inbound-rtp":
+                let kind = stat.values["kind"] as? String ?? "?"
+                let pt = (stat.values["payloadType"] as? NSNumber)?.intValue ?? -1
+                let ssrc = (stat.values["ssrc"] as? NSNumber)?.intValue ?? -1
+                let pkts = (stat.values["packetsReceived"] as? NSNumber)?.intValue ?? -1
+                print("[MediaProbe] inbound-rtp kind=\(kind) pt=\(pt) ssrc=\(ssrc) pkts=\(pkts)")
+            default:
+                break
             }
         }
     }
