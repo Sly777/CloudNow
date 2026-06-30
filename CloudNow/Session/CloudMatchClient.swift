@@ -172,7 +172,7 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
     let tzOffset = TimeZone.current.secondsFromGMT() * 1000
     let trueHdr = false
     let cloudMatchBitDepth = input.settings.colorQuality == .sdr8bit ? 0 : 1
-    let cloudMatchChromaFormat = 1
+    let cloudMatchChromaFormat = input.settings.colorQuality == .sdr8bit ? 0 : 1
 
     return [
         "sessionRequestData": [

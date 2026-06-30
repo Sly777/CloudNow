@@ -308,6 +308,7 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
         var metricsRequestInFlight = false
         var activeEnqueues = 0
         var pendingFlush: FlushRequest?
+        var loggedFirstFrame = false
     }
 
     var sampleBufferRenderer: AVSampleBufferVideoRenderer?
@@ -322,7 +323,16 @@ private final class WebRTCFrameRenderer: NSObject, LKRTCVideoRenderer {
     func setSize(_: CGSize) {}
 
     func renderFrame(_ frame: LKRTCVideoFrame?) {
-        guard let frame, let sampleBufferRenderer else { return }
+        guard let frame else { return }
+        let shouldLogFirstFrame = state.withLock { state -> Bool in
+            guard !state.loggedFirstFrame else { return false }
+            state.loggedFirstFrame = true
+            return true
+        }
+        if shouldLogFirstFrame {
+            print("[MediaProbe] first decoded video frame \(frame.width)x\(frame.height) buffer=\(type(of: frame.buffer))")
+        }
+        guard let sampleBufferRenderer else { return }
         let trace = diagnostics.beginFrame()
 
         if sampleBufferRenderer.status == .failed || sampleBufferRenderer.requiresFlushToResumeDecoding {

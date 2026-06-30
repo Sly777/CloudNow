@@ -141,6 +141,8 @@ final class GFNStreamController: NSObject {
     private var peerConnection: LKRTCPeerConnection?
     private var inputDataChannel: LKRTCDataChannel?
     @ObservationIgnored private nonisolated(unsafe) var reliableSendChannel: LKRTCDataChannel?
+    @ObservationIgnored private nonisolated(unsafe) var partiallyReliableSendChannel: LKRTCDataChannel?
+    @ObservationIgnored private nonisolated(unsafe) var rumbleSink: ((Int, UInt16, UInt16) -> Void)?
     @ObservationIgnored private nonisolated(unsafe) var inputGenerated: UInt64 = 0
     @ObservationIgnored private nonisolated(unsafe) var inputSubmitted: UInt64 = 0
     @ObservationIgnored private nonisolated(unsafe) var inputAccepted: UInt64 = 0
@@ -335,11 +337,13 @@ final class GFNStreamController: NSObject {
         inputDataChannel = nil
         inputSendQueue.sync {
             reliableSendChannel = nil
+            partiallyReliableSendChannel = nil
             let pending = Array(pendingGamepadSnapshots.values)
             pendingGamepadSnapshots.removeAll()
             inputDropped &+= UInt64(pending.count)
             pending.forEach { $0.completion(.channelUnavailable) }
         }
+        inputSendQueue.async { [weak self] in self?.rumbleSink = nil }
         partiallyReliableDataChannel = nil
         controlChannel = nil
         videoTrack = nil
@@ -388,6 +392,7 @@ final class GFNStreamController: NSObject {
         inputDataChannel = nil
         partiallyReliableDataChannel = nil
         reliableSendChannel = nil
+        partiallyReliableSendChannel = nil
         controlChannel = nil
         videoTrack = nil
         micAudioTrack = nil
@@ -540,6 +545,8 @@ final class GFNStreamController: NSObject {
         prConfig.isNegotiated = false
         if let dc = pc.dataChannel(forLabel: "input_channel_partially_reliable", configuration: prConfig) {
             partiallyReliableDataChannel = dc
+            partiallyReliableSendChannel = dc
+            dc.delegate = self
         }
 
         // Attach microphone audio track if enabled (must happen before answer creation
@@ -596,11 +603,14 @@ final class GFNStreamController: NSObject {
             // Apply codec preference to the answer (not the offer) — avoids the
             // orphaned FEC-FR SSRC issue that caused video port 0 when munging the offer.
             let codecFilteredSdp = SDPMunger.preferCodec(answer.sdp, codec: settings.codec)
+            let fmtpAlignedSdp = SDPMunger.alignAnswerVideoFmtpWithOffer(
+                answer: codecFilteredSdp, offer: h265NormalizedSdp, codec: settings.codec
+            )
             // For H.265: rewrite tier-flag=1→0 and cap level-id to hardware-safe values.
             // Apple's decoder may reject High-tier or above-spec level-id advertisements.
             let h265SafeSdp = settings.codec == .h265
-                ? SDPMunger.rewriteH265LevelId(SDPMunger.rewriteH265TierFlag(codecFilteredSdp))
-                : codecFilteredSdp
+                ? SDPMunger.rewriteH265LevelId(SDPMunger.rewriteH265TierFlag(fmtpAlignedSdp))
+                : fmtpAlignedSdp
             let mangledAnswerSdp = SDPMunger.injectBandwidth(h265SafeSdp, videoKbps: settings.maxBitrateKbps)
             #if DEBUG
                 print("[Stream] Answer SDP (\(mangledAnswerSdp.count) chars):")
@@ -622,49 +632,12 @@ final class GFNStreamController: NSObject {
             signaling?.sendAnswer(sdp: mangledAnswerSdp, nvstSdp: buildNvstSdp(iceUfrag: iceUfrag, icePwd: icePwd, dtlsFingerprint: dtlsFingerprint))
             signalingComplete = true
 
-            // Inject the server's ICE host candidate AFTER sending the answer.
-            // GFN offers have no a=candidate: lines — the server relies on the client to probe it.
-            // Primary source: mediaConnectionInfo (usage=2, or usage=14 highest-port fallback).
-            // Fallback: all DNS-resolved IPs for the signaling hostname + SDP m-line port.
-            let mciIp = session.mediaConnectionInfo.flatMap { Self.extractIpFromHost($0.ip) }
-            let mciPort = session.mediaConnectionInfo?.port ?? 0
-
-            let sdpPort = sdp.components(separatedBy: "\r\n").compactMap { line -> Int? in
-                guard line.hasPrefix("m=") else { return nil }
-                let p = line.components(separatedBy: " ")
-                guard p.count >= 2, let port = Int(p[1]), port > 9 else { return nil }
-                return port
-            }.first ?? 0
-
-            // Saturate ICE with every plausible server endpoint.
-            // We don't know which port carries UDP media (usage=2 is absent for this zone),
-            // so we inject candidates for ALL combinations of known IPs × known ports.
-            // ICE probes them all simultaneously and succeeds on the first STUN reply.
-            let resolvedIps = signaling?.resolvedIPs ?? []
-            let connectedHost = signaling?.connectedHost ?? ""
-            var allIps: [String] = []
-            if let ip = mciIp { allIps.append(ip) }
-            for ip in resolvedIps where !allIps.contains(ip) {
-                allIps.append(ip)
-            }
-            if !connectedHost.isEmpty, !allIps.contains(connectedHost) { allIps.append(connectedHost) }
-
-            let allPorts = [mciPort, sdpPort].filter { $0 > 0 }
-            let pairs = allIps.flatMap { ip in allPorts.map { (ip, $0) } }
-
-            if pairs.isEmpty {
-                print("[ICE] No server IPs or ports available — ICE candidate injection skipped")
-            } else {
-                print("[ICE] Injecting \(pairs.count) candidate(s) (mciIp=\(mciIp ?? "nil") mciPort=\(mciPort) sdpPort=\(sdpPort))")
-                for (i, (ip, port)) in pairs.enumerated() {
-                    let cand = LKRTCIceCandidate(
-                        sdp: "candidate:\(i + 1) 1 UDP 2130706431 \(ip) \(port) typ host",
-                        sdpMLineIndex: 0, sdpMid: "0"
-                    )
-                    try? await pc.add(cand)
-                    print("[ICE]   → \(ip):\(port)")
-                }
-            }
+            // Do NOT inject fabricated mediaConnectionInfo/SDP-port host candidates: they used
+            // priority 2130706431 — higher than the server's real signaling candidate (~2130569217) —
+            // so ICE selected a decoy port that passes STUN but never carries RTP, and the server
+            // aborts with nvstResult 0x80194004. Media flows only to the server's ICE candidate
+            // delivered via signaling and added in addRemoteICE.
+            print("[ICE] Using server-provided signaling ICE candidate only (no injection)")
         } catch {
             state = .failed(message: "Answer creation failed: \(error.localizedDescription)")
         }
@@ -685,57 +658,158 @@ final class GFNStreamController: NSObject {
         return (ufrag, pwd, fingerprint)
     }
 
-    /// Builds the NVIDIA streaming protocol capability descriptor sent alongside the WebRTC answer.
-    /// Builds the NVST SDP capability descriptor — critically includes the client's ICE credentials so the
-    /// GFN server can validate STUN MESSAGE-INTEGRITY on incoming binding requests.
+    /// Builds the NVST SDP capability descriptor sent alongside the WebRTC answer.
+    /// The GFN server configures its video encoder from these attributes — an under-specified
+    /// video section makes the server accept the session but emit zero video RTP (exit
+    /// 0x80194004). The field set mirrors OpenNOW's build_nvst_sdp / the official web client.
+    /// Also includes the client's ICE credentials so the server can validate STUN MESSAGE-INTEGRITY.
     private func buildNvstSdp(iceUfrag: String, icePwd: String, dtlsFingerprint: String) -> String {
         let resolutionParts = settings.resolution.split(separator: "x")
         let width = Int(resolutionParts.first ?? "1920") ?? 1920
         let height = Int(resolutionParts.last ?? "1080") ?? 1080
-        let minBitrateKbps = max(5000, settings.maxBitrateKbps * 35 / 100)
-        let initialBitrateKbps = max(minBitrateKbps, settings.maxBitrateKbps * 70 / 100)
+        let maxBitrateKbps = settings.maxBitrateKbps
+        let minBitrateKbps = max(5000, maxBitrateKbps * 35 / 100)
+        let initialBitrateKbps = max(minBitrateKbps, maxBitrateKbps * 70 / 100)
+        let isHighFps = settings.fps >= 90
+        let is120Fps = settings.fps == 120
+        let is240Fps = settings.fps >= 240
+        let isAV1 = settings.codec == .av1
+        let bitDepth = settings.colorQuality.bitDepth
 
         var lines: [String] = [
             "v=0",
             "o=SdpTest test_id_13 14 IN IPv4 127.0.0.1",
             "s=-",
             "t=0 0",
-            // Client ICE credentials — GFN server uses these (not the WebRTC SDP) to validate STUN
             "a=general.icePassword:\(icePwd)",
             "a=general.iceUserNameFragment:\(iceUfrag)",
             "a=general.dtlsFingerprint:\(dtlsFingerprint)",
-            // Video section with quality/bitrate hints for the server encoder
             "m=video 0 RTP/AVP",
             "a=msid:fbc-video-0",
             "a=vqos.fec.rateDropWindow:10",
+            "a=vqos.fec.minRequiredFecPackets:2",
+            "a=vqos.fec.repairMinPercent:5",
             "a=vqos.fec.repairPercent:5",
+            "a=vqos.fec.repairMaxPercent:35",
+            "a=vqos.dynamicStreamingMode:0",
             "a=vqos.drc.enable:0",
-            "a=vqos.dfc.enable:0",
-            "a=video.enableRtpNack:1",
-            "a=video.packetSize:1140",
+            "a=video.dx9EnableNv12:1",
+            "a=video.dx9EnableHdr:1",
+            "a=vqos.qpg.enable:1",
+            "a=vqos.resControl.qp.qpg.featureSetting:7",
             "a=bwe.useOwdCongestionControl:1",
+            "a=video.enableRtpNack:1",
+            "a=vqos.bw.txRxLag.minFeedbackTxDeltaMs:200",
+            "a=vqos.drc.bitrateIirFilterFactor:18",
+            "a=video.packetSize:1140",
+            "a=packetPacing.minNumPacketsPerGroup:15",
+        ]
+
+        if isHighFps {
+            lines += [
+                "a=vqos.dfc.enable:1",
+                "a=vqos.dfc.decodeFpsAdjPercent:85",
+                "a=vqos.dfc.targetDownCooldownMs:250",
+                "a=vqos.dfc.dfcAlgoVersion:\(is120Fps || is240Fps ? 2 : 1)",
+                "a=vqos.dfc.minTargetFps:\(is120Fps || is240Fps ? 100 : 60)",
+                "a=vqos.resControl.dfc.useClientFpsPerf:0",
+                "a=vqos.dfc.adjustResAndFps:0",
+                "a=bwe.iirFilterFactor:8",
+                "a=video.encoderFeatureSetting:47",
+                "a=video.encoderPreset:6",
+                "a=vqos.resControl.cpmRtc.badNwSkipFramesCount:600",
+                "a=vqos.resControl.cpmRtc.decodeTimeThresholdMs:9",
+                "a=video.fbcDynamicFpsGrabTimeoutMs:\(is120Fps ? 6 : 18)",
+                "a=vqos.resControl.cpmRtc.serverResolutionUpdateCoolDownCount:\(is120Fps ? 6000 : 12000)",
+            ]
+        } else {
+            lines += [
+                "a=vqos.dfc.enable:0",
+                "a=vqos.dfc.adjustResAndFps:0",
+            ]
+        }
+
+        if is240Fps {
+            lines += [
+                "a=video.enableNextCaptureMode:1",
+                "a=vqos.maxStreamFpsEstimate:240",
+                "a=video.videoSplitEncodeStripsPerFrame:3",
+                "a=video.updateSplitEncodeStateDynamically:1",
+                "a=vqos.rtcPreemptiveIdrSettings.minBurstNackSize:65535",
+                "a=vqos.rtcPreemptiveIdrSettings.minNackPacketCaptureAgeMs:65535",
+            ]
+        }
+
+        lines += [
+            "a=vqos.adjustStreamingFpsDuringOutOfFocus:0",
+            "a=vqos.resControl.cpmRtc.ignoreOutOfFocusWindowState:1",
+            "a=vqos.resControl.perfHistory.rtcIgnoreOutOfFocusWindowState:1",
+            "a=vqos.resControl.cpmRtc.featureMask:0",
             "a=vqos.resControl.cpmRtc.enable:0",
             "a=vqos.resControl.cpmRtc.minResolutionPercent:100",
+            "a=vqos.resControl.cpmRtc.resolutionChangeHoldonMs:999999",
+            "a=packetPacing.numGroups:\(is120Fps ? 3 : 5)",
+            "a=packetPacing.maxDelayUs:1000",
+            "a=packetPacing.minNumPacketsFrame:10",
+            "a=video.rtpNackQueueLength:1024",
+            "a=video.rtpNackQueueMaxPackets:512",
+            "a=video.rtpNackMaxPacketCount:25",
+            "a=vqos.drc.qpMaxResThresholdAdj:4",
+            "a=vqos.grc.qpMaxResThresholdAdj:4",
+            "a=vqos.drc.iirFilterFactor:100",
+        ]
+
+        if isAV1 {
+            lines += [
+                "a=vqos.drc.minQpHeadroom:20",
+                "a=vqos.drc.lowerQpThreshold:100",
+                "a=vqos.drc.upperQpThreshold:200",
+                "a=vqos.drc.minAdaptiveQpThreshold:180",
+                "a=vqos.drc.qpCodecThresholdAdj:0",
+                "a=vqos.drc.qpMaxResThresholdAdj:20",
+                "a=vqos.dfc.minQpHeadroom:20",
+                "a=vqos.dfc.qpLowerLimit:100",
+                "a=vqos.dfc.qpMaxUpperLimit:200",
+                "a=vqos.dfc.qpMinUpperLimit:180",
+                "a=vqos.dfc.qpMaxResThresholdAdj:20",
+                "a=vqos.dfc.qpCodecThresholdAdj:0",
+                "a=vqos.grc.minQpHeadroom:20",
+                "a=vqos.grc.lowerQpThreshold:100",
+                "a=vqos.grc.upperQpThreshold:200",
+                "a=vqos.grc.minAdaptiveQpThreshold:180",
+                "a=vqos.grc.qpMaxResThresholdAdj:20",
+                "a=vqos.grc.qpCodecThresholdAdj:0",
+                "a=video.minQp:25",
+                "a=video.enableAv1RcPrecisionFactor:1",
+            ]
+        }
+
+        lines += [
             "a=video.clientViewportWd:\(width)",
             "a=video.clientViewportHt:\(height)",
             "a=video.maxFPS:\(settings.fps)",
             "a=video.initialBitrateKbps:\(initialBitrateKbps)",
-            "a=video.initialPeakBitrateKbps:\(settings.maxBitrateKbps)",
-            "a=vqos.bw.maximumBitrateKbps:\(settings.maxBitrateKbps)",
+            "a=video.initialPeakBitrateKbps:\(maxBitrateKbps)",
+            "a=vqos.bw.maximumBitrateKbps:\(maxBitrateKbps)",
             "a=vqos.bw.minimumBitrateKbps:\(minBitrateKbps)",
-            "a=vqos.bw.peakBitrateKbps:\(settings.maxBitrateKbps)",
-            "a=video.bitDepth:\(settings.colorQuality.bitDepth)",
+            "a=vqos.bw.peakBitrateKbps:\(maxBitrateKbps)",
+            "a=vqos.bw.serverPeakBitrateKbps:\(maxBitrateKbps)",
+            "a=vqos.bw.enableBandwidthEstimation:1",
+            "a=vqos.bw.disableBitrateLimit:0",
+            "a=vqos.grc.maximumBitrateKbps:\(maxBitrateKbps)",
+            "a=vqos.grc.enable:0",
+            "a=video.maxNumReferenceFrames:4",
+            "a=video.mapRtpTimestampsToFrames:1",
+            "a=video.encoderCscMode:3",
+            "a=video.dynamicRangeMode:0",
+            "a=video.bitDepth:\(bitDepth)",
+            "a=video.scalingFeature1:\(isAV1 ? 1 : 0)",
+            "a=video.prefilterParams.prefilterModel:0",
             "m=audio 0 RTP/AVP",
             "a=msid:audio",
-        ]
-        if settings.micEnabled {
-            lines += [
-                "m=mic 0 RTP/AVP",
-                "a=msid:mic",
-                "a=rtpmap:0 PCMU/8000",
-            ]
-        }
-        lines += [
+            "m=mic 0 RTP/AVP",
+            "a=msid:mic",
+            "a=rtpmap:0 PCMU/8000",
             "m=application 0 RTP/AVP",
             "a=msid:input_1",
             "a=ri.partialReliableThresholdMs:\(partialReliableThresholdMs)",
@@ -852,6 +926,11 @@ final class GFNStreamController: NSObject {
             peerConnection.statistics(for: videoReceiver) { [weak self] report in
                 streamStatsParsingQueue.async {
                     let snapshot = Self.parseVideoStats(report)
+                    if let s = snapshot {
+                        print("[MediaProbe] video pkts=\(Int(s.packetsReceived)) bytes=\(Int(s.bytesReceived)) decoded=\(Int(s.framesDecoded)) dropped=\(Int(s.framesDropped)) \(Int(s.frameWidth))x\(Int(s.frameHeight))")
+                    } else {
+                        print("[MediaProbe] video: no inbound-rtp stat yet")
+                    }
                     Task { @MainActor [weak self] in
                         guard let self, statsGeneration == generation else { return }
                         videoStatsRequestInFlight = false
@@ -866,6 +945,9 @@ final class GFNStreamController: NSObject {
             peerConnection.statistics { [weak self] report in
                 streamStatsParsingQueue.async {
                     let snapshot = Self.parseConnectionStats(report)
+                    if let s = snapshot {
+                        print("[MediaProbe] net=\(s.selectedNetworkPath) rtt=\(Int(s.rttMs))ms")
+                    }
                     Task { @MainActor [weak self] in
                         guard let self, statsGeneration == generation else { return }
                         connectionStatsRequestInFlight = false
@@ -876,6 +958,10 @@ final class GFNStreamController: NSObject {
                     }
                 }
             }
+        }
+
+        peerConnection.statistics { report in
+            streamStatsParsingQueue.async { Self.logMediaTransportProbe(report) }
         }
     }
 
@@ -914,6 +1000,25 @@ final class GFNStreamController: NSObject {
                 stats.inputQueueMaxMs = Double(maxNs) / 1_000_000
                 stats.newestGamepadAgeMs = Double(gamepadAgeNs) / 1_000_000
                 stats.inputChannelState = channelState
+            }
+        }
+    }
+
+    private nonisolated static func logMediaTransportProbe(_ report: LKRTCStatisticsReport) {
+        for (_, stat) in report.statistics {
+            switch stat.type {
+            case "transport":
+                let rx = (stat.values["bytesReceived"] as? NSNumber)?.intValue ?? -1
+                let pkts = (stat.values["packetsReceived"] as? NSNumber)?.intValue ?? -1
+                print("[MediaProbe] transport bytesReceived=\(rx) packetsReceived=\(pkts)")
+            case "inbound-rtp":
+                let kind = stat.values["kind"] as? String ?? "?"
+                let pt = (stat.values["payloadType"] as? NSNumber)?.intValue ?? -1
+                let ssrc = (stat.values["ssrc"] as? NSNumber)?.intValue ?? -1
+                let pkts = (stat.values["packetsReceived"] as? NSNumber)?.intValue ?? -1
+                print("[MediaProbe] inbound-rtp kind=\(kind) pt=\(pt) ssrc=\(ssrc) pkts=\(pkts)")
+            default:
+                break
             }
         }
     }
@@ -997,6 +1102,12 @@ final class GFNStreamController: NSObject {
             ?? candidatePairs.values.first(where: \.nominated)
             ?? candidatePairs.values.first
         guard let selectedPair else { return nil }
+
+        if let remoteStat = report.statistics[selectedPair.remoteID] {
+            let addr = (remoteStat.values["address"] as? String) ?? (remoteStat.values["ip"] as? String) ?? "?"
+            let port = (remoteStat.values["port"] as? NSNumber)?.intValue ?? 0
+            print("[MediaProbe] selected remote candidate \(addr):\(port)")
+        }
 
         let local = candidateDetails[selectedPair.localID]
         let remote = candidateDetails[selectedPair.remoteID]
@@ -1336,7 +1447,7 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
     }
 
     nonisolated func dataChannel(_ dataChannel: LKRTCDataChannel, didChangeBufferedAmount amount: UInt64) {
-        guard dataChannel.label == "input_channel_v1" else { return }
+        guard dataChannel.label == "input_channel_v1" || dataChannel.label == "input_channel_partially_reliable" else { return }
         inputSendQueue.async { [weak self] in
             guard let self else { return }
             inputBufferedBytes = amount
@@ -1387,6 +1498,13 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             version = Int(firstWord)
             print("[DataChannel] Handshake: byte[0]=0x0e, version=\(version)")
         } else {
+            if let cmd = GFNHapticsDecoder.decode(buffer.data) {
+                RumbleLog.frame("[Rumble] inbound controller=\(cmd.controllerId) weak=\(cmd.weak) strong=\(cmd.strong)")
+                inputSendQueue.async { [weak self] in
+                    self?.rumbleSink?(cmd.controllerId, cmd.weak, cmd.strong)
+                }
+                return
+            }
             print("[DataChannel] Non-handshake message on \(dataChannel.label): firstWord=\(firstWord) (0x\(String(firstWord, radix: 16)))")
             return
         }
@@ -1403,7 +1521,9 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
                 deadzone: Float(settings.controllerDeadzone),
                 overlayTriggerButton: settings.overlayTriggerButton,
                 steamOverlayGestureEnabled: settings.enableSteamOverlayGesture,
-                remoteMode: settings.defaultRemoteInputMode
+                remoteMode: settings.defaultRemoteInputMode,
+                rumbleEnabled: settings.rumbleEnabled,
+                rumbleAdjust: settings.rumbleAdjust
             )
             remoteMode = settings.defaultRemoteInputMode
             videoView?.gamepadModeActive = (remoteMode == .gamepad || remoteMode == .dualsense)
@@ -1414,6 +1534,9 @@ extension GFNStreamController: LKRTCDataChannelDelegate {
             }
             sender.start()
             inputSender = sender
+            inputSendQueue.async { [weak self, weak sender] in
+                self?.rumbleSink = { sender?.applyRumble(controllerId: $0, weak: $1, strong: $2) }
+            }
             // Forward keyboard/mouse events from the video surface to the sender
             videoView?.inputHandler = sender
         }
@@ -1434,7 +1557,7 @@ extension GFNStreamController: DataChannelSender {
             }
             inputGenerated &+= 1
 
-            guard let dc = reliableSendChannel, dc.readyState == .open else {
+            guard let dc = sendChannel(for: packet), dc.readyState == .open else {
                 inputDropped &+= 1
                 completion(.channelUnavailable)
                 return
@@ -1456,6 +1579,16 @@ extension GFNStreamController: DataChannelSender {
             sendImmediately(packet, completion: completion, on: dc)
             drainPendingGamepadSnapshotsIfPossible(on: dc)
         }
+    }
+
+    private nonisolated func sendChannel(for packet: EncodedInputPacket) -> LKRTCDataChannel? {
+        if packet.category == .gamepadSnapshot,
+           let dataChannel = partiallyReliableSendChannel,
+           dataChannel.readyState == .open
+        {
+            return dataChannel
+        }
+        return reliableSendChannel
     }
 
     private nonisolated func sendImmediately(
@@ -1495,6 +1628,11 @@ extension GFNStreamController: DataChannelSender {
     private nonisolated func drainPendingGamepadSnapshotsIfPossible(on dataChannel: LKRTCDataChannel) {
         guard dataChannel.readyState == .open,
               dataChannel.bufferedAmount <= inputBackpressureLowWaterBytes else { return }
+        if dataChannel.label == "input_channel_v1",
+           partiallyReliableSendChannel?.readyState == .open
+        {
+            return
+        }
         for slot in pendingGamepadSnapshots.keys.sorted() {
             guard dataChannel.bufferedAmount <= inputBackpressureHighWaterBytes,
                   let pending = pendingGamepadSnapshots.removeValue(forKey: slot) else { break }
