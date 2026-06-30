@@ -171,6 +171,12 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
     let (width, height) = resolutionPixels(for: input.settings)
     let tzOffset = TimeZone.current.secondsFromGMT() * 1000
     let color = input.settings.colorRequest(localCapabilities: .detect(codec: input.settings.codec))
+    // Send the raw bit depth / chroma format (sdr8 → 8/1) to match what buildNvstSdp
+    // advertises (a=video.bitDepth). #42/#44 diverged these — CloudMatch got 0 while the
+    // NVST SDP still sent 8 — so the server accepted the session but emitted zero video RTP
+    // (exit 0x80194004). The #44-trimmed field set is kept, so the body stays HTTP-200-sized.
+    let cloudMatchBitDepth = color.bitDepth
+    let cloudMatchChromaFormat = color.chromaFormat ?? 1
 
     return [
         "sessionRequestData": [
@@ -222,12 +228,12 @@ private func buildSessionRequestBody(_ input: SessionCreateRequest, deviceId: St
             "userAge": 26,
             "requestedStreamingFeatures": [
                 "reflex": input.settings.fps >= 120,
-                "bitDepth": cloudMatchBitDepth(color),
+                "bitDepth": cloudMatchBitDepth,
                 "cloudGsync": false,
                 "enabledL4S": input.settings.enableL4S,
                 "profile": 0,
                 "fallbackToLogicalResolution": false,
-                "chromaFormat": color.bitDepth >= 10 ? 1 : 0,
+                "chromaFormat": cloudMatchChromaFormat,
                 "prefilterMode": 0,
                 "prefilterSharpness": 0,
                 "prefilterNoiseReduction": 0,
