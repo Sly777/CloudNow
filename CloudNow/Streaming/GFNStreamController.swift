@@ -629,49 +629,12 @@ final class GFNStreamController: NSObject {
             signaling?.sendAnswer(sdp: mangledAnswerSdp, nvstSdp: buildNvstSdp(iceUfrag: iceUfrag, icePwd: icePwd, dtlsFingerprint: dtlsFingerprint))
             signalingComplete = true
 
-            // Inject the server's ICE host candidate AFTER sending the answer.
-            // GFN offers have no a=candidate: lines — the server relies on the client to probe it.
-            // Primary source: mediaConnectionInfo (usage=2, or usage=14 highest-port fallback).
-            // Fallback: all DNS-resolved IPs for the signaling hostname + SDP m-line port.
-            let mciIp = session.mediaConnectionInfo.flatMap { Self.extractIpFromHost($0.ip) }
-            let mciPort = session.mediaConnectionInfo?.port ?? 0
-
-            let sdpPort = sdp.components(separatedBy: "\r\n").compactMap { line -> Int? in
-                guard line.hasPrefix("m=") else { return nil }
-                let p = line.components(separatedBy: " ")
-                guard p.count >= 2, let port = Int(p[1]), port > 9 else { return nil }
-                return port
-            }.first ?? 0
-
-            // Saturate ICE with every plausible server endpoint.
-            // We don't know which port carries UDP media (usage=2 is absent for this zone),
-            // so we inject candidates for ALL combinations of known IPs × known ports.
-            // ICE probes them all simultaneously and succeeds on the first STUN reply.
-            let resolvedIps = signaling?.resolvedIPs ?? []
-            let connectedHost = signaling?.connectedHost ?? ""
-            var allIps: [String] = []
-            if let ip = mciIp { allIps.append(ip) }
-            for ip in resolvedIps where !allIps.contains(ip) {
-                allIps.append(ip)
-            }
-            if !connectedHost.isEmpty, !allIps.contains(connectedHost) { allIps.append(connectedHost) }
-
-            let allPorts = [mciPort, sdpPort].filter { $0 > 0 }
-            let pairs = allIps.flatMap { ip in allPorts.map { (ip, $0) } }
-
-            if pairs.isEmpty {
-                print("[ICE] No server IPs or ports available — ICE candidate injection skipped")
-            } else {
-                print("[ICE] Injecting \(pairs.count) candidate(s) (mciIp=\(mciIp ?? "nil") mciPort=\(mciPort) sdpPort=\(sdpPort))")
-                for (i, (ip, port)) in pairs.enumerated() {
-                    let cand = LKRTCIceCandidate(
-                        sdp: "candidate:\(i + 1) 1 UDP 2130706431 \(ip) \(port) typ host",
-                        sdpMLineIndex: 0, sdpMid: "0"
-                    )
-                    try? await pc.add(cand)
-                    print("[ICE]   → \(ip):\(port)")
-                }
-            }
+            // Do NOT inject fabricated mediaConnectionInfo/SDP-port host candidates: they used
+            // priority 2130706431 — higher than the server's real signaling candidate (~2130569217) —
+            // so ICE selected a decoy port that passes STUN but never carries RTP, and the server
+            // aborts with nvstResult 0x80194004. Media flows only to the server's ICE candidate
+            // delivered via signaling and added in addRemoteICE.
+            print("[ICE] Using server-provided signaling ICE candidate only (no injection)")
         } catch {
             state = .failed(message: "Answer creation failed: \(error.localizedDescription)")
         }
@@ -1012,6 +975,12 @@ final class GFNStreamController: NSObject {
             ?? candidatePairs.values.first(where: \.nominated)
             ?? candidatePairs.values.first
         guard let selectedPair else { return nil }
+
+        if let remoteStat = report.statistics[selectedPair.remoteID] {
+            let addr = (remoteStat.values["address"] as? String) ?? (remoteStat.values["ip"] as? String) ?? "?"
+            let port = (remoteStat.values["port"] as? NSNumber)?.intValue ?? 0
+            print("[MediaProbe] selected remote candidate \(addr):\(port)")
+        }
 
         let local = candidateDetails[selectedPair.localID]
         let remote = candidateDetails[selectedPair.remoteID]
