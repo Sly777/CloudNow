@@ -92,6 +92,54 @@ enum SDPMunger {
         return result.joined(separator: sep)
     }
 
+    // MARK: - Answer fmtp Alignment
+
+    /// Rewrites each selected video-codec payload type's `a=fmtp` in the answer to exactly
+    /// echo the server's offered `a=fmtp` for the same payload type. GFN's NVST/WebRTC bridge
+    /// keys its encoder off the offered payload tuple, so when iOS substitutes its own
+    /// profile-level-id (e.g. H.264 42e034 vs offered 42e01f) and drops NVIDIA-specific knobs
+    /// like sps-pps-idr-in-keyframe=1, the server emits zero video RTP and exits 0x80194004.
+    /// RTX payload types are left untouched. Apply after preferCodec, before injectBandwidth.
+    static func alignAnswerVideoFmtpWithOffer(answer: String, offer: String, codec: VideoCodec) -> String {
+        let targetName = rtpName(for: codec)
+        let sep = answer.contains("\r\n") ? "\r\n" : "\n"
+        let offerFmtp = videoFmtpByPT(offer)
+        guard !offerFmtp.isEmpty else { return answer }
+
+        let answerLines = answer.components(separatedBy: sep)
+
+        var codecPTs = Set<String>()
+        var inVideo = false
+        for line in answerLines {
+            if line.hasPrefix("m=video") { inVideo = true; continue }
+            if line.hasPrefix("m=") { inVideo = false }
+            guard inVideo, line.hasPrefix("a=rtpmap:") else { continue }
+            let parts = line.dropFirst("a=rtpmap:".count).components(separatedBy: " ")
+            guard parts.count >= 2 else { continue }
+            let name = parts[1].components(separatedBy: "/").first?.lowercased() ?? ""
+            if name == targetName || (codec == .h265 && name == "hevc") {
+                codecPTs.insert(String(parts[0]))
+            }
+        }
+        guard !codecPTs.isEmpty else { return answer }
+
+        inVideo = false
+        var result: [String] = []
+        for line in answerLines {
+            if line.hasPrefix("m=video") { inVideo = true; result.append(line); continue }
+            if line.hasPrefix("m=") { inVideo = false }
+            if inVideo, line.hasPrefix("a=fmtp:") {
+                let pt = line.dropFirst("a=fmtp:".count).components(separatedBy: " ").first.map(String.init) ?? ""
+                if codecPTs.contains(pt), let offered = offerFmtp[pt] {
+                    result.append("a=fmtp:\(pt) \(offered)")
+                    continue
+                }
+            }
+            result.append(line)
+        }
+        return result.joined(separator: sep)
+    }
+
     // MARK: - Bandwidth Injection
 
     /// Appends b=AS: bandwidth hints after each m=video and m=audio line.
@@ -214,5 +262,21 @@ enum SDPMunger {
             }
         }
         return nil
+    }
+
+    private static func videoFmtpByPT(_ sdp: String) -> [String: String] {
+        let sep = sdp.contains("\r\n") ? "\r\n" : "\n"
+        var map: [String: String] = [:]
+        var inVideo = false
+        for line in sdp.components(separatedBy: sep) {
+            if line.hasPrefix("m=video") { inVideo = true; continue }
+            if line.hasPrefix("m=") { inVideo = false }
+            guard inVideo, line.hasPrefix("a=fmtp:") else { continue }
+            let rest = line.dropFirst("a=fmtp:".count)
+            guard let space = rest.firstIndex(of: " ") else { continue }
+            let pt = String(rest[..<space])
+            map[pt] = String(rest[rest.index(after: space)...])
+        }
+        return map
     }
 }
