@@ -859,6 +859,11 @@ final class GFNStreamController: NSObject {
             peerConnection.statistics(for: videoReceiver) { [weak self] report in
                 streamStatsParsingQueue.async {
                     let snapshot = Self.parseVideoStats(report)
+                    if let s = snapshot {
+                        print("[MediaProbe] video pkts=\(Int(s.packetsReceived)) bytes=\(Int(s.bytesReceived)) decoded=\(Int(s.framesDecoded)) dropped=\(Int(s.framesDropped)) \(Int(s.frameWidth))x\(Int(s.frameHeight))")
+                    } else {
+                        print("[MediaProbe] video: no inbound-rtp stat yet")
+                    }
                     Task { @MainActor [weak self] in
                         guard let self, statsGeneration == generation else { return }
                         videoStatsRequestInFlight = false
@@ -873,6 +878,9 @@ final class GFNStreamController: NSObject {
             peerConnection.statistics { [weak self] report in
                 streamStatsParsingQueue.async {
                     let snapshot = Self.parseConnectionStats(report)
+                    if let s = snapshot {
+                        print("[MediaProbe] net=\(s.selectedNetworkPath) rtt=\(Int(s.rttMs))ms")
+                    }
                     Task { @MainActor [weak self] in
                         guard let self, statsGeneration == generation else { return }
                         connectionStatsRequestInFlight = false
