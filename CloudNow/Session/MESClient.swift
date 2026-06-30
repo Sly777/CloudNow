@@ -16,6 +16,18 @@ actor MESClient {
         let url = URL(string: "\(base)/v2/serverInfo")!
         var request = URLRequest(url: url)
         request.setValue("GFNJWT \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(NVIDIAAuth.webOrigin, forHTTPHeaderField: "Origin")
+        request.setValue(NVIDIAAuth.webReferer, forHTTPHeaderField: "Referer")
+        request.setValue(NVIDIAAuth.gfnClientId, forHTTPHeaderField: "nv-client-id")
+        request.setValue("BROWSER", forHTTPHeaderField: "nv-client-type")
+        request.setValue(NVIDIAAuth.gfnClientVersion, forHTTPHeaderField: "nv-client-version")
+        request.setValue("WEBRTC", forHTTPHeaderField: "nv-client-streamer")
+        request.setValue("WINDOWS", forHTTPHeaderField: "nv-device-os")
+        request.setValue("DESKTOP", forHTTPHeaderField: "nv-device-type")
+        request.setValue("UNKNOWN", forHTTPHeaderField: "nv-device-make")
+        request.setValue("UNKNOWN", forHTTPHeaderField: "nv-device-model")
+        request.setValue("CHROME", forHTTPHeaderField: "nv-browser-type")
         request.setValue(NVIDIAAuth.userAgent, forHTTPHeaderField: "User-Agent")
         let (data, _) = try await urlSession.data(for: request)
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -42,12 +54,12 @@ actor MESClient {
         }
         var request = URLRequest(url: url)
         request.setValue("GFNJWT \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("ec7e38d4-03af-4b58-b131-cfb0495903ab", forHTTPHeaderField: "nv-client-id")
+        request.setValue(NVIDIAAuth.gfnClientId, forHTTPHeaderField: "nv-client-id")
         request.setValue("NATIVE", forHTTPHeaderField: "nv-client-type")
-        request.setValue("2.0.80.173", forHTTPHeaderField: "nv-client-version")
+        request.setValue(NVIDIAAuth.gfnClientVersion, forHTTPHeaderField: "nv-client-version")
         request.setValue("NVIDIA-CLASSIC", forHTTPHeaderField: "nv-client-streamer")
-        request.setValue("WINDOWS",        forHTTPHeaderField: "nv-device-os")
-        request.setValue("DESKTOP",        forHTTPHeaderField: "nv-device-type")
+        request.setValue("WINDOWS", forHTTPHeaderField: "nv-device-os")
+        request.setValue("DESKTOP", forHTTPHeaderField: "nv-device-type")
         request.setValue(NVIDIAAuth.userAgent, forHTTPHeaderField: "User-Agent")
         let (data, resp) = try await urlSession.data(for: request)
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
@@ -62,11 +74,10 @@ actor MESClient {
         let decoder = JSONDecoder()
 
         // Response may be an array or a single object — try both
-        let raw: MESRawResponse
-        if let array = try? decoder.decode([MESRawResponse].self, from: data), let first = array.first {
-            raw = first
+        let raw: MESRawResponse = if let array = try? decoder.decode([MESRawResponse].self, from: data), let first = array.first {
+            first
         } else {
-            raw = try decoder.decode(MESRawResponse.self, from: data)
+            try decoder.decode(MESRawResponse.self, from: data)
         }
 
         let tier = raw.membershipTier ?? raw.type ?? "FREE"
@@ -119,8 +130,8 @@ enum MESError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidURL: return "Failed to build MES request URL."
-        case .fetchFailed(let msg): return "Subscription fetch failed: \(msg)"
+        case .invalidURL: "Failed to build MES request URL."
+        case let .fetchFailed(msg): "Subscription fetch failed: \(msg)"
         }
     }
 }

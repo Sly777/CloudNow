@@ -5,7 +5,10 @@ import Foundation
 struct StreamSettings: Codable, Equatable {
     var resolution: String = "1920x1080"
     var fps: Int = 60
-    var maxBitrateKbps: Int = 20_000 { didSet { maxBitrateKbps = min(maxBitrateKbps, 100_000) } }
+    var maxBitrateKbps: Int = 20000 {
+        didSet { maxBitrateKbps = min(maxBitrateKbps, 100_000) }
+    }
+
     var codec: VideoCodec = .h264
     var colorQuality: ColorQuality = .sdr8bit
     var keyboardLayout: String = "en-US"
@@ -16,68 +19,107 @@ struct StreamSettings: Codable, Equatable {
     var controllerDeadzone: Double = 0.15
     /// Which controller button triggers the GFN overlay on long-press. Default: Start (≡).
     var overlayTriggerButton: OverlayTriggerButton = .start
-    /// Default Siri Remote input mode when a stream session starts.
+    /// Default remote/controller input mode when a stream session starts.
     var defaultRemoteInputMode: RemoteInputMode = .mouse
     /// Preferred zone URL, e.g. "https://np-aws-us-n-virginia-1.cloudmatchbeta.nvidiagrid.net/"
-    /// nil = let the GFN default VPC handle routing.
+    /// nil = choose an automatic zone when available, otherwise let the GFN default VPC route.
     var preferredZoneUrl: String? = nil
     /// Long-press the button that is NOT the overlay trigger to send Shift+Tab (opens the
     /// Steam in-game overlay). e.g. with overlay on Start, long-press View/Back triggers Steam.
     var enableSteamOverlayGesture: Bool = true
+    /// Controls receiver statistics collection. Diagnostic mode also enables video-pipeline tracing.
+    var statsMode: StreamStatsMode = .hud
+    /// Captures a bounded WebRTC event log for the duration of the next stream.
+    var enableRtcEventLog: Bool = false
+
+    var normalizedForClient: StreamSettings {
+        var normalized = self
+        // The software I420 path is 8-bit video-range BT.709 and cannot preserve HDR/10-bit metadata.
+        if normalized.codec == .av1 {
+            normalized.colorQuality = .sdr8bit
+        }
+        if normalized.statsMode != .diagnostic {
+            normalized.enableRtcEventLog = false
+        }
+        return normalized
+    }
 }
 
 // MARK: - StreamSettings: resilient decoding
-//
-// Synthesized Decodable throws keyNotFound when a newly-added field is missing from
-// previously-persisted JSON, which would silently reset ALL settings to defaults on upgrade.
-// decodeIfPresent + default fallbacks keep existing settings intact across versions.
+
+///
+/// Synthesized Decodable throws keyNotFound when a newly-added field is missing from
+/// previously-persisted JSON, which would silently reset ALL settings to defaults on upgrade.
+/// decodeIfPresent + default fallbacks keep existing settings intact across versions.
 extension StreamSettings {
     enum CodingKeys: String, CodingKey {
         case resolution, fps, maxBitrateKbps, codec, colorQuality, keyboardLayout
         case gameLanguage, enableL4S, micEnabled, controllerDeadzone, overlayTriggerButton
         case defaultRemoteInputMode, preferredZoneUrl
         case enableSteamOverlayGesture
+        case statsMode, enableRtcEventLog
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = StreamSettings()
         self.init()
-        resolution            = try c.decodeIfPresent(String.self,            forKey: .resolution)            ?? d.resolution
-        fps                   = try c.decodeIfPresent(Int.self,               forKey: .fps)                   ?? d.fps
-        maxBitrateKbps        = try c.decodeIfPresent(Int.self,               forKey: .maxBitrateKbps)        ?? d.maxBitrateKbps
-        codec                 = try c.decodeIfPresent(VideoCodec.self,        forKey: .codec)                 ?? d.codec
-        colorQuality          = try c.decodeIfPresent(ColorQuality.self,      forKey: .colorQuality)          ?? d.colorQuality
-        keyboardLayout        = try c.decodeIfPresent(String.self,            forKey: .keyboardLayout)        ?? d.keyboardLayout
-        gameLanguage          = try c.decodeIfPresent(String.self,            forKey: .gameLanguage)          ?? d.gameLanguage
-        enableL4S             = try c.decodeIfPresent(Bool.self,              forKey: .enableL4S)             ?? d.enableL4S
-        micEnabled            = try c.decodeIfPresent(Bool.self,              forKey: .micEnabled)            ?? d.micEnabled
-        controllerDeadzone    = try c.decodeIfPresent(Double.self,            forKey: .controllerDeadzone)    ?? d.controllerDeadzone
-        overlayTriggerButton  = try c.decodeIfPresent(OverlayTriggerButton.self, forKey: .overlayTriggerButton) ?? d.overlayTriggerButton
-        defaultRemoteInputMode = try c.decodeIfPresent(RemoteInputMode.self,  forKey: .defaultRemoteInputMode) ?? d.defaultRemoteInputMode
-        preferredZoneUrl      = try c.decodeIfPresent(String.self,            forKey: .preferredZoneUrl)
-        enableSteamOverlayGesture = try c.decodeIfPresent(Bool.self,         forKey: .enableSteamOverlayGesture) ?? d.enableSteamOverlayGesture
+        resolution = try c.decodeIfPresent(String.self, forKey: .resolution) ?? d.resolution
+        fps = try c.decodeIfPresent(Int.self, forKey: .fps) ?? d.fps
+        maxBitrateKbps = try c.decodeIfPresent(Int.self, forKey: .maxBitrateKbps) ?? d.maxBitrateKbps
+        codec = try c.decodeIfPresent(VideoCodec.self, forKey: .codec) ?? d.codec
+        colorQuality = try c.decodeIfPresent(ColorQuality.self, forKey: .colorQuality) ?? d.colorQuality
+        keyboardLayout = try c.decodeIfPresent(String.self, forKey: .keyboardLayout) ?? d.keyboardLayout
+        gameLanguage = try c.decodeIfPresent(String.self, forKey: .gameLanguage) ?? d.gameLanguage
+        enableL4S = try c.decodeIfPresent(Bool.self, forKey: .enableL4S) ?? d.enableL4S
+        micEnabled = try c.decodeIfPresent(Bool.self, forKey: .micEnabled) ?? d.micEnabled
+        controllerDeadzone = try c.decodeIfPresent(Double.self, forKey: .controllerDeadzone) ?? d.controllerDeadzone
+        overlayTriggerButton = try c.decodeIfPresent(OverlayTriggerButton.self, forKey: .overlayTriggerButton) ?? d.overlayTriggerButton
+        defaultRemoteInputMode = try c.decodeIfPresent(RemoteInputMode.self, forKey: .defaultRemoteInputMode) ?? d.defaultRemoteInputMode
+        preferredZoneUrl = try c.decodeIfPresent(String.self, forKey: .preferredZoneUrl)
+        enableSteamOverlayGesture = try c.decodeIfPresent(Bool.self, forKey: .enableSteamOverlayGesture) ?? d.enableSteamOverlayGesture
+        statsMode = try c.decodeIfPresent(StreamStatsMode.self, forKey: .statsMode) ?? d.statsMode
+        enableRtcEventLog = try c.decodeIfPresent(Bool.self, forKey: .enableRtcEventLog) ?? d.enableRtcEventLog
+    }
+}
+
+enum StreamStatsMode: String, Codable, CaseIterable {
+    case off
+    case hud
+    case diagnostic
+
+    var label: String {
+        switch self {
+        case .off: "Off"
+        case .hud: "HUD"
+        case .diagnostic: "Diagnostic"
+        }
     }
 }
 
 enum OverlayTriggerButton: String, Codable, CaseIterable {
-    case start   = "Start (≡)"
+    case start = "Start (≡)"
     case options = "Options/Back (⊟)"
 }
 
 enum VideoCodec: String, Codable, CaseIterable {
     case h264 = "H264"
     case h265 = "H265"
-    case av1  = "AV1"
+    case av1 = "AV1"
 }
 
 enum ColorQuality: String, Codable, CaseIterable {
-    case sdr8bit  = "SDR8bit"
+    case sdr8bit = "SDR8bit"
     case sdr10bit = "SDR10bit"
     case hdr10bit = "HDR10bit"
 
-    var bitDepth: Int { self == .sdr8bit ? 8 : 10 }
-    var chromaFormat: Int { self == .hdr10bit ? 2 : 1 }
+    var bitDepth: Int {
+        self == .sdr8bit ? 8 : 10
+    }
+
+    var chromaFormat: Int {
+        self == .hdr10bit ? 2 : 1
+    }
 }
 
 // MARK: - ICE Server
@@ -101,7 +143,9 @@ struct SessionAdInfo: Codable, Equatable, Identifiable {
     let mediaUrl: String?
     let adMediaFiles: [SessionAdMediaFile]
     let adLengthInSeconds: Double?
-    var id: String { adId }
+    var id: String {
+        adId
+    }
 
     /// Returns the best available media URL.
     var preferredMediaURL: URL? {
@@ -167,7 +211,9 @@ struct EntitledResolution: Equatable {
     let heightInPixels: Int
     let framesPerSecond: Int
 
-    var resolutionLabel: String { "\(widthInPixels)x\(heightInPixels)" }
+    var resolutionLabel: String {
+        "\(widthInPixels)x\(heightInPixels)"
+    }
 }
 
 struct SubscriptionInfo {
@@ -180,7 +226,7 @@ struct SubscriptionInfo {
 
 // MARK: - Games
 
-struct GameInfo: Identifiable, Equatable {
+struct GameInfo: Identifiable, Equatable, Codable {
     let id: String
     let title: String
     let boxArtUrl: String?
@@ -199,27 +245,27 @@ struct GameInfo: Identifiable, Equatable {
 
     /// Stores this game is owned through (drives the Library filter chips).
     var ownedStores: [String] {
-        variants.filter { $0.isOwned }.map { $0.appStore }
+        variants.filter(\.isOwned).map(\.appStore)
     }
 }
 
-struct GameVariant: Equatable {
+struct GameVariant: Equatable, Codable {
     let id: String
     let appStore: String
     var appId: String?
-    /// True when GFN reports a library status other than `NOT_OWNED` for this variant.
+    /// True when GFN reports MANUAL, PLATFORM_SYNC, or IN_LIBRARY for this variant.
     var isOwned: Bool = false
 
     var storeName: String {
         switch appStore {
-        case "STEAM": return "Steam"
-        case "EPIC_GAMES_STORE": return "Epic Games"
-        case "GOG": return "GOG"
-        case "EA_APP": return "EA App"
-        case "UBISOFT": return "Ubisoft Connect"
-        case "MICROSOFT": return "Xbox"
-        case "BATTLENET": return "Battle.net"
-        default: return appStore.replacingOccurrences(of: "_", with: " ").capitalized
+        case "STEAM": "Steam"
+        case "EPIC_GAMES_STORE": "Epic Games"
+        case "GOG": "GOG"
+        case "EA_APP": "EA App"
+        case "UBISOFT": "Ubisoft Connect"
+        case "MICROSOFT": "Xbox"
+        case "BATTLENET": "Battle.net"
+        default: appStore.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
 }
@@ -230,8 +276,8 @@ struct SessionCreateRequest {
     let appId: String
     let internalTitle: String?
     let token: String
-    let zone: String
     let streamingBaseUrl: String?
+    let routingZoneUrl: String?
     let settings: StreamSettings
     let accountLinked: Bool
 }
