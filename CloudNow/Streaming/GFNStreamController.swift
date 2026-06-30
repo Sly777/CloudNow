@@ -719,57 +719,158 @@ final class GFNStreamController: NSObject {
         return (ufrag, pwd, fingerprint)
     }
 
-    /// Builds the NVIDIA streaming protocol capability descriptor sent alongside the WebRTC answer.
-    /// Builds the NVST SDP capability descriptor — critically includes the client's ICE credentials so the
-    /// GFN server can validate STUN MESSAGE-INTEGRITY on incoming binding requests.
+    /// Builds the NVST SDP capability descriptor sent alongside the WebRTC answer.
+    /// The GFN server configures its video encoder from these attributes — an under-specified
+    /// video section makes the server accept the session but emit zero video RTP (exit
+    /// 0x80194004). The field set mirrors OpenNOW's build_nvst_sdp / the official web client.
+    /// Also includes the client's ICE credentials so the server can validate STUN MESSAGE-INTEGRITY.
     private func buildNvstSdp(iceUfrag: String, icePwd: String, dtlsFingerprint: String) -> String {
         let resolutionParts = settings.resolution.split(separator: "x")
         let width = Int(resolutionParts.first ?? "1920") ?? 1920
         let height = Int(resolutionParts.last ?? "1080") ?? 1080
-        let minBitrateKbps = max(5000, settings.maxBitrateKbps * 35 / 100)
-        let initialBitrateKbps = max(minBitrateKbps, settings.maxBitrateKbps * 70 / 100)
+        let maxBitrateKbps = settings.maxBitrateKbps
+        let minBitrateKbps = max(5000, maxBitrateKbps * 35 / 100)
+        let initialBitrateKbps = max(minBitrateKbps, maxBitrateKbps * 70 / 100)
+        let isHighFps = settings.fps >= 90
+        let is120Fps = settings.fps == 120
+        let is240Fps = settings.fps >= 240
+        let isAV1 = settings.codec == .av1
+        let bitDepth = settings.colorRequest(localCapabilities: .detect(codec: settings.codec)).bitDepth
 
         var lines: [String] = [
             "v=0",
             "o=SdpTest test_id_13 14 IN IPv4 127.0.0.1",
             "s=-",
             "t=0 0",
-            // Client ICE credentials — GFN server uses these (not the WebRTC SDP) to validate STUN
             "a=general.icePassword:\(icePwd)",
             "a=general.iceUserNameFragment:\(iceUfrag)",
             "a=general.dtlsFingerprint:\(dtlsFingerprint)",
-            // Video section with quality/bitrate hints for the server encoder
             "m=video 0 RTP/AVP",
             "a=msid:fbc-video-0",
             "a=vqos.fec.rateDropWindow:10",
+            "a=vqos.fec.minRequiredFecPackets:2",
+            "a=vqos.fec.repairMinPercent:5",
             "a=vqos.fec.repairPercent:5",
+            "a=vqos.fec.repairMaxPercent:35",
+            "a=vqos.dynamicStreamingMode:0",
             "a=vqos.drc.enable:0",
-            "a=vqos.dfc.enable:0",
-            "a=video.enableRtpNack:1",
-            "a=video.packetSize:1140",
+            "a=video.dx9EnableNv12:1",
+            "a=video.dx9EnableHdr:1",
+            "a=vqos.qpg.enable:1",
+            "a=vqos.resControl.qp.qpg.featureSetting:7",
             "a=bwe.useOwdCongestionControl:1",
+            "a=video.enableRtpNack:1",
+            "a=vqos.bw.txRxLag.minFeedbackTxDeltaMs:200",
+            "a=vqos.drc.bitrateIirFilterFactor:18",
+            "a=video.packetSize:1140",
+            "a=packetPacing.minNumPacketsPerGroup:15",
+        ]
+
+        if isHighFps {
+            lines += [
+                "a=vqos.dfc.enable:1",
+                "a=vqos.dfc.decodeFpsAdjPercent:85",
+                "a=vqos.dfc.targetDownCooldownMs:250",
+                "a=vqos.dfc.dfcAlgoVersion:\(is120Fps || is240Fps ? 2 : 1)",
+                "a=vqos.dfc.minTargetFps:\(is120Fps || is240Fps ? 100 : 60)",
+                "a=vqos.resControl.dfc.useClientFpsPerf:0",
+                "a=vqos.dfc.adjustResAndFps:0",
+                "a=bwe.iirFilterFactor:8",
+                "a=video.encoderFeatureSetting:47",
+                "a=video.encoderPreset:6",
+                "a=vqos.resControl.cpmRtc.badNwSkipFramesCount:600",
+                "a=vqos.resControl.cpmRtc.decodeTimeThresholdMs:9",
+                "a=video.fbcDynamicFpsGrabTimeoutMs:\(is120Fps ? 6 : 18)",
+                "a=vqos.resControl.cpmRtc.serverResolutionUpdateCoolDownCount:\(is120Fps ? 6000 : 12000)",
+            ]
+        } else {
+            lines += [
+                "a=vqos.dfc.enable:0",
+                "a=vqos.dfc.adjustResAndFps:0",
+            ]
+        }
+
+        if is240Fps {
+            lines += [
+                "a=video.enableNextCaptureMode:1",
+                "a=vqos.maxStreamFpsEstimate:240",
+                "a=video.videoSplitEncodeStripsPerFrame:3",
+                "a=video.updateSplitEncodeStateDynamically:1",
+                "a=vqos.rtcPreemptiveIdrSettings.minBurstNackSize:65535",
+                "a=vqos.rtcPreemptiveIdrSettings.minNackPacketCaptureAgeMs:65535",
+            ]
+        }
+
+        lines += [
+            "a=vqos.adjustStreamingFpsDuringOutOfFocus:0",
+            "a=vqos.resControl.cpmRtc.ignoreOutOfFocusWindowState:1",
+            "a=vqos.resControl.perfHistory.rtcIgnoreOutOfFocusWindowState:1",
+            "a=vqos.resControl.cpmRtc.featureMask:0",
             "a=vqos.resControl.cpmRtc.enable:0",
             "a=vqos.resControl.cpmRtc.minResolutionPercent:100",
+            "a=vqos.resControl.cpmRtc.resolutionChangeHoldonMs:999999",
+            "a=packetPacing.numGroups:\(is120Fps ? 3 : 5)",
+            "a=packetPacing.maxDelayUs:1000",
+            "a=packetPacing.minNumPacketsFrame:10",
+            "a=video.rtpNackQueueLength:1024",
+            "a=video.rtpNackQueueMaxPackets:512",
+            "a=video.rtpNackMaxPacketCount:25",
+            "a=vqos.drc.qpMaxResThresholdAdj:4",
+            "a=vqos.grc.qpMaxResThresholdAdj:4",
+            "a=vqos.drc.iirFilterFactor:100",
+        ]
+
+        if isAV1 {
+            lines += [
+                "a=vqos.drc.minQpHeadroom:20",
+                "a=vqos.drc.lowerQpThreshold:100",
+                "a=vqos.drc.upperQpThreshold:200",
+                "a=vqos.drc.minAdaptiveQpThreshold:180",
+                "a=vqos.drc.qpCodecThresholdAdj:0",
+                "a=vqos.drc.qpMaxResThresholdAdj:20",
+                "a=vqos.dfc.minQpHeadroom:20",
+                "a=vqos.dfc.qpLowerLimit:100",
+                "a=vqos.dfc.qpMaxUpperLimit:200",
+                "a=vqos.dfc.qpMinUpperLimit:180",
+                "a=vqos.dfc.qpMaxResThresholdAdj:20",
+                "a=vqos.dfc.qpCodecThresholdAdj:0",
+                "a=vqos.grc.minQpHeadroom:20",
+                "a=vqos.grc.lowerQpThreshold:100",
+                "a=vqos.grc.upperQpThreshold:200",
+                "a=vqos.grc.minAdaptiveQpThreshold:180",
+                "a=vqos.grc.qpMaxResThresholdAdj:20",
+                "a=vqos.grc.qpCodecThresholdAdj:0",
+                "a=video.minQp:25",
+                "a=video.enableAv1RcPrecisionFactor:1",
+            ]
+        }
+
+        lines += [
             "a=video.clientViewportWd:\(width)",
             "a=video.clientViewportHt:\(height)",
             "a=video.maxFPS:\(settings.fps)",
             "a=video.initialBitrateKbps:\(initialBitrateKbps)",
-            "a=video.initialPeakBitrateKbps:\(settings.maxBitrateKbps)",
-            "a=vqos.bw.maximumBitrateKbps:\(settings.maxBitrateKbps)",
+            "a=video.initialPeakBitrateKbps:\(maxBitrateKbps)",
+            "a=vqos.bw.maximumBitrateKbps:\(maxBitrateKbps)",
             "a=vqos.bw.minimumBitrateKbps:\(minBitrateKbps)",
-            "a=vqos.bw.peakBitrateKbps:\(settings.maxBitrateKbps)",
-            "a=video.bitDepth:\(settings.colorRequest(localCapabilities: .detect(codec: settings.codec)).bitDepth)",
+            "a=vqos.bw.peakBitrateKbps:\(maxBitrateKbps)",
+            "a=vqos.bw.serverPeakBitrateKbps:\(maxBitrateKbps)",
+            "a=vqos.bw.enableBandwidthEstimation:1",
+            "a=vqos.bw.disableBitrateLimit:0",
+            "a=vqos.grc.maximumBitrateKbps:\(maxBitrateKbps)",
+            "a=vqos.grc.enable:0",
+            "a=video.maxNumReferenceFrames:4",
+            "a=video.mapRtpTimestampsToFrames:1",
+            "a=video.encoderCscMode:3",
+            "a=video.dynamicRangeMode:0",
+            "a=video.bitDepth:\(bitDepth)",
+            "a=video.scalingFeature1:\(isAV1 ? 1 : 0)",
+            "a=video.prefilterParams.prefilterModel:0",
             "m=audio 0 RTP/AVP",
             "a=msid:audio",
-        ]
-        if settings.micEnabled {
-            lines += [
-                "m=mic 0 RTP/AVP",
-                "a=msid:mic",
-                "a=rtpmap:0 PCMU/8000",
-            ]
-        }
-        lines += [
+            "m=mic 0 RTP/AVP",
+            "a=msid:mic",
+            "a=rtpmap:0 PCMU/8000",
             "m=application 0 RTP/AVP",
             "a=msid:input_1",
             "a=ri.partialReliableThresholdMs:\(partialReliableThresholdMs)",
