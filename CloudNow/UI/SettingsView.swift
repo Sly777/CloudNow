@@ -176,6 +176,15 @@ struct SettingsView: View {
                 }
 
                 Section(L10n.text("controller")) {
+                    Toggle(isOn: $vm.streamSettings.rumbleEnabled) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(L10n.text("controller_rumble"))
+                            Text(L10n.text("controller_rumble_description"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                    }
                     LabeledContent {
                         HStack(spacing: 16) {
                             Button {

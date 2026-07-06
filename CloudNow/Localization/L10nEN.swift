@@ -66,6 +66,8 @@ enum L10nEN {
         "controller": "Controller",
         "deadzone": "Deadzone",
         "deadzone_description": "Increase if your controller drifts at rest. Default: 15%.",
+        "controller_rumble": "Controller Rumble",
+        "controller_rumble_description": "Vibrate supported controllers during streams. Applies to the next session.",
         "overlay_button": "Overlay Button",
         "overlay_button_description": "Long-press this button during play to open the app overlay. Switch if it conflicts with an in-game action.",
         "steam_overlay_gesture": "Steam Overlay Gesture",
