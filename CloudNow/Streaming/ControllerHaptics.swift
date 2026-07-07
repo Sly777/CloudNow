@@ -28,6 +28,12 @@ final nonisolated class ControllerHaptics {
     private let strongMotor: Motor?
     private let weakMotor: Motor?
 
+    /// User-controlled rumble power (mirrors StreamSettings.rumbleIntensity). Mutate on `queue`.
+    var intensityScale: Float = 1.0
+
+    /// Perceptual gamma applied to raw magnitudes; <1 boosts subtle low-end rumble.
+    private static let intensityCurveExponent: Float = 0.5
+
     init?(controller: GCController, queue: DispatchQueue) {
         guard let haptics = controller.haptics else {
             print("[Rumble] controller has NO haptics")
@@ -122,30 +128,21 @@ final nonisolated class ControllerHaptics {
 
     private func apply(_ magnitude: UInt16, to motor: Motor) {
         guard magnitude != motor.lastMagnitude else { return }
+        motor.lastMagnitude = magnitude
 
-        if magnitude == 0 {
-            if motor.playing {
-                do {
-                    try motor.player?.stop(atTime: 0)
-                } catch {
-                    motor.log(error)
-                }
-            }
-            motor.playing = false
-            motor.lastMagnitude = magnitude
-            return
-        }
-
+        // Keep ONE continuous player running and modulate its intensity live, including
+        // down to zero. GFN streams rumble at frame-rate and oscillates through 0 many
+        // times per second; stopping/restarting the player on every zero produced a
+        // choppy "brrr-brrr" texture. Create the player lazily on the first non-zero
+        // magnitude, then never stop it until pause/detach.
         if motor.player == nil {
-            motor.player = makePlayer(for: motor)
-            if motor.player == nil {
-                return
-            }
+            guard magnitude > 0, let player = makePlayer(for: motor) else { return }
+            motor.player = player
         }
 
         let parameter = CHHapticDynamicParameter(
             parameterID: .hapticIntensityControl,
-            value: Float(magnitude) / 65535.0,
+            value: Self.curvedIntensity(magnitude, scale: intensityScale),
             relativeTime: 0
         )
         do {
@@ -154,16 +151,23 @@ final nonisolated class ControllerHaptics {
             motor.log(error)
         }
 
-        if !motor.playing {
-            do {
-                try motor.player?.start(atTime: 0)
-                motor.playing = true
-            } catch {
-                motor.log(error)
-            }
+        guard !motor.playing else { return }
+        do {
+            try motor.player?.start(atTime: 0)
+            motor.playing = true
+        } catch {
+            motor.log(error)
         }
+    }
 
-        motor.lastMagnitude = magnitude
+    /// Maps a 0–65535 XInput magnitude to a Core Haptics intensity in 0…1.
+    /// A gamma curve (<1 exponent) lifts the low end so subtle in-game rumble is
+    /// actually felt, and `scale` (the user's Rumble Power) multiplies before clamping.
+    private static func curvedIntensity(_ magnitude: UInt16, scale: Float) -> Float {
+        guard magnitude > 0 else { return 0 }
+        let normalized = Float(magnitude) / 65535.0
+        let curved = powf(normalized, intensityCurveExponent)
+        return min(curved * scale, 1.0)
     }
 
     private func makePlayer(for motor: Motor) -> CHHapticPatternPlayer? {

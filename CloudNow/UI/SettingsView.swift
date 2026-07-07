@@ -185,6 +185,36 @@ struct SettingsView: View {
                         }
                         .padding(.vertical, 8)
                     }
+                    if vm.streamSettings.rumbleEnabled {
+                        LabeledContent {
+                            HStack(spacing: 16) {
+                                Button {
+                                    vm.streamSettings.rumbleIntensity = max(StreamSettings.minRumbleIntensity, vm.streamSettings.rumbleIntensity - 0.05)
+                                } label: {
+                                    Image(systemName: "minus.circle")
+                                }
+                                .buttonStyle(.plain)
+                                Text("\(Int((vm.streamSettings.rumbleIntensity * 100).rounded()))%")
+                                    .monospacedDigit()
+                                    .frame(minWidth: 44)
+                                    .padding(.horizontal, 24)
+                                Button {
+                                    vm.streamSettings.rumbleIntensity = min(StreamSettings.maxRumbleIntensity, vm.streamSettings.rumbleIntensity + 0.05)
+                                } label: {
+                                    Image(systemName: "plus.circle")
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(L10n.text("controller_rumble_intensity"))
+                                Text(L10n.text("controller_rumble_intensity_description"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 8)
+                        }
+                    }
                     LabeledContent {
                         HStack(spacing: 16) {
                             Button {
