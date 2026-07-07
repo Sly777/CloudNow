@@ -36,8 +36,6 @@ struct StreamView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
-
             switch streamController.state {
             case .idle, .connecting:
                 connectingView

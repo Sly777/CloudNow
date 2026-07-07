@@ -10,8 +10,6 @@ struct HomeView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
-
             if viewModel.isLoading {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
