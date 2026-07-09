@@ -6,6 +6,8 @@ struct StreamSettings: Codable, Equatable {
     static let maxSelectableBitrateKbps = 100_000
     static let minControllerDeadzone = 0.0
     static let maxControllerDeadzone = 0.30
+    static let minRumbleIntensity = 0.0
+    static let maxRumbleIntensity = 2.0
     static let defaultKeyboardLayout = L10n.keyboardLayoutCode()
     static let automaticGameLanguage = "automatic"
     static let defaultGameLanguage = automaticGameLanguage
@@ -22,6 +24,12 @@ struct StreamSettings: Codable, Equatable {
     var gameLanguage: String = Self.defaultGameLanguage
     var enableL4S: Bool = false
     var micEnabled: Bool = false
+    var rumbleEnabled: Bool = true
+    /// Rumble power multiplier (0.0–2.0, 1.0 = default). Higher stresses controller motors.
+    var rumbleIntensity: Double = 1.0 {
+        didSet { rumbleIntensity = min(max(rumbleIntensity, Self.minRumbleIntensity), Self.maxRumbleIntensity) }
+    }
+
     /// Radial deadzone applied to analog stick axes (0.0–1.0). Default 15%.
     var controllerDeadzone: Double = 0.15 {
         didSet { controllerDeadzone = min(max(controllerDeadzone, Self.minControllerDeadzone), Self.maxControllerDeadzone) }
@@ -64,7 +72,7 @@ struct StreamSettings: Codable, Equatable {
 extension StreamSettings {
     enum CodingKeys: String, CodingKey {
         case resolution, fps, maxBitrateKbps, codec, colorPreference, keyboardLayout
-        case gameLanguage, enableL4S, micEnabled, controllerDeadzone, overlayTriggerButton
+        case gameLanguage, enableL4S, micEnabled, rumbleEnabled, rumbleIntensity, controllerDeadzone, overlayTriggerButton
         case defaultRemoteInputMode, preferredZoneUrl
         case enableSteamOverlayGesture
         case statsMode, enableRtcEventLog
@@ -86,6 +94,8 @@ extension StreamSettings {
         gameLanguage = try c.decodeIfPresent(String.self, forKey: .gameLanguage) ?? d.gameLanguage
         enableL4S = try c.decodeIfPresent(Bool.self, forKey: .enableL4S) ?? d.enableL4S
         micEnabled = try c.decodeIfPresent(Bool.self, forKey: .micEnabled) ?? d.micEnabled
+        rumbleEnabled = try c.decodeIfPresent(Bool.self, forKey: .rumbleEnabled) ?? d.rumbleEnabled
+        rumbleIntensity = try c.decodeIfPresent(Double.self, forKey: .rumbleIntensity) ?? d.rumbleIntensity
         controllerDeadzone = try c.decodeIfPresent(Double.self, forKey: .controllerDeadzone) ?? d.controllerDeadzone
         overlayTriggerButton = try c.decodeIfPresent(OverlayTriggerButton.self, forKey: .overlayTriggerButton) ?? d.overlayTriggerButton
         defaultRemoteInputMode = try c.decodeIfPresent(RemoteInputMode.self, forKey: .defaultRemoteInputMode) ?? d.defaultRemoteInputMode
@@ -106,6 +116,8 @@ extension StreamSettings {
         try c.encode(gameLanguage, forKey: .gameLanguage)
         try c.encode(enableL4S, forKey: .enableL4S)
         try c.encode(micEnabled, forKey: .micEnabled)
+        try c.encode(rumbleEnabled, forKey: .rumbleEnabled)
+        try c.encode(rumbleIntensity, forKey: .rumbleIntensity)
         try c.encode(controllerDeadzone, forKey: .controllerDeadzone)
         try c.encode(overlayTriggerButton, forKey: .overlayTriggerButton)
         try c.encode(defaultRemoteInputMode, forKey: .defaultRemoteInputMode)
