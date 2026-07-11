@@ -51,25 +51,56 @@ actor GamesClient {
 
     // MARK: Fetch Full Catalog (browse API)
 
-    func fetchMainGames(token: String, streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl) async throws -> [GameInfo] {
-        let vpcId = await (try? fetchVpcId(token: token, baseUrl: streamingBaseUrl)) ?? "GFN-PC"
+    func fetchMainGames(token: String, streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl, vpcId: String? = nil) async throws -> [GameInfo] {
+        let vpcId = await resolveVpcId(vpcId, token: token, baseUrl: streamingBaseUrl)
+        // The public catalog is independent of the browse pagination — fetch both at once.
+        async let publicTask = fetchPublicCatalog()
         let games = try await browseCatalog(token: token, vpcId: vpcId, filters: [:], maxPages: 15)
-        let publicGames = await (try? fetchPublicCatalog()) ?? []
+        let publicGames = await (try? publicTask) ?? []
         return mergeCatalog(games, supplemental: publicGames)
     }
 
     // MARK: Fetch Library (owned/purchased games via browse filter)
 
-    func fetchLibrary(token: String, streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl) async throws -> [GameInfo] {
-        let vpcId = await (try? fetchVpcId(token: token, baseUrl: streamingBaseUrl)) ?? "GFN-PC"
+    func fetchLibrary(token: String, streamingBaseUrl: String = NVIDIAAuth.defaultStreamingUrl, vpcId: String? = nil) async throws -> [GameInfo] {
+        let vpcId = await resolveVpcId(vpcId, token: token, baseUrl: streamingBaseUrl)
         let libraryFilter: [String: Any] = ["variants": ["gfn": ["library": ["status": ["notEquals": "NOT_OWNED"]]]]]
         let games = try await browseCatalog(token: token, vpcId: vpcId, filters: libraryFilter, maxPages: 10)
         return await (try? enrich(token: token, vpcId: vpcId, games: games)) ?? games
     }
 
+    /// Callers that load catalog, library, and subscription together fetch the vpcId
+    /// once and pass it in; standalone calls fall back to fetching it here.
+    private func resolveVpcId(_ provided: String?, token: String, baseUrl: String) async -> String {
+        if let provided, !provided.isEmpty { return provided }
+        return await (try? fetchVpcId(token: token, baseUrl: baseUrl)) ?? "GFN-PC"
+    }
+
     // MARK: - Catalog Browse
 
+    /// Cursor pagination is inherently serial (each page needs the previous cursor),
+    /// so page count dominates load time. Large pages cut the round trips; the
+    /// long-proven 200-item retry runs only when the oversized page is plausibly
+    /// the cause: a client-error HTTP status (except auth) or an empty result —
+    /// a GraphQL-level rejection arrives as HTTP 200 with no data. Auth, network,
+    /// and server failures propagate immediately instead of doubling the requests.
     private func browseCatalog(token: String, vpcId: String, filters: [String: Any], searchString: String? = nil, maxPages: Int = 3) async throws -> [GameInfo] {
+        do {
+            let games = try await browsePages(
+                token: token, vpcId: vpcId, filters: filters, searchString: searchString,
+                pageSize: 500, maxPages: maxPages
+            )
+            if !games.isEmpty { return games }
+        } catch let GamesError.httpStatus(code, _) where (400 ..< 500).contains(code) && code != 403 {
+            // Fall through to the 200-item retry.
+        }
+        return try await browsePages(
+            token: token, vpcId: vpcId, filters: filters, searchString: searchString,
+            pageSize: 200, maxPages: maxPages
+        )
+    }
+
+    private func browsePages(token: String, vpcId: String, filters: [String: Any], searchString: String?, pageSize: Int, maxPages: Int) async throws -> [GameInfo] {
         var allGames: [GameInfo] = []
         var seen = Set<String>()
         var cursor = ""
@@ -79,7 +110,7 @@ actor GamesClient {
                 "vpcId": vpcId,
                 "locale": localeCode,
                 "sortString": "sortName:ASC",
-                "fetchCount": 200,
+                "fetchCount": pageSize,
                 "cursor": cursor,
                 "filters": filters,
             ]
@@ -102,8 +133,10 @@ actor GamesClient {
             request.httpBody = bodyData
 
             let (data, response) = try await urlSession.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                throw GamesError.fetchFailed(String(data: data, encoding: .utf8) ?? "")
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard statusCode == 200 else {
+                if statusCode == 401 { throw GamesError.unauthorized }
+                throw GamesError.httpStatus(statusCode, String(data: data, encoding: .utf8) ?? "")
             }
 
             let payload = try JSONDecoder().decode(BrowseResponse.self, from: data)
@@ -746,6 +779,7 @@ private struct AnyCodableGameId: Decodable {
 
 enum GamesError: Error, LocalizedError {
     case fetchFailed(String)
+    case httpStatus(Int, String)
     case graphql(String)
     case pagination(String)
     case unauthorized
@@ -753,6 +787,7 @@ enum GamesError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case let .fetchFailed(message): "Games fetch failed: \(message)"
+        case let .httpStatus(code, message): "Games fetch failed: HTTP \(code): \(message)"
         case let .graphql(message): "Games GraphQL error: \(message)"
         case let .pagination(message): "Games pagination failed: \(message)"
         case .unauthorized: "Games authentication was rejected."
