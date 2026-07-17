@@ -135,14 +135,6 @@ enum L10n {
         }
     }
 
-    static func hdrSupportLabel(_ support: HDRSupport) -> String {
-        switch support {
-        case .supported: text("supported")
-        case .unsupported: text("unsupported")
-        case .unknown: text("unknown")
-        }
-    }
-
     static func colorFallbackReasonLabel(_ reason: ColorFallbackReason) -> String {
         switch reason {
         case .gameHDRUnknown: text("game_hdr_unknown")
@@ -162,14 +154,6 @@ enum L10n {
         }
     }
 
-    static func decoderPathLabel(_ path: VideoDecoderPath) -> String {
-        switch path {
-        case .hardware: text("hardware")
-        case .softwareI420: text("software_i420")
-        case .unknown: text("unknown")
-        }
-    }
-
     static func metadataDiagnosticSummary(
         transferFunction: String?,
         colorPrimaries: String?,
@@ -178,52 +162,22 @@ enum L10n {
         hasContentLightLevelMetadata: Bool
     ) -> String {
         var parts: [String] = []
-        if transferFunction == nil { parts.append(text("no_transfer")) }
-        if colorPrimaries == nil { parts.append(text("no_primaries")) }
-        if yCbCrMatrix == nil { parts.append(text("no_matrix")) }
-        if !hasDisplayColorVolumeMetadata { parts.append(text("no_mastering_metadata")) }
-        if !hasContentLightLevelMetadata { parts.append(text("no_content_light_metadata")) }
+        if transferFunction == nil {
+            parts.append(text("no_transfer"))
+        }
+        if colorPrimaries == nil {
+            parts.append(text("no_primaries"))
+        }
+        if yCbCrMatrix == nil {
+            parts.append(text("no_matrix"))
+        }
+        if !hasDisplayColorVolumeMetadata {
+            parts.append(text("no_mastering_metadata"))
+        }
+        if !hasContentLightLevelMetadata {
+            parts.append(text("no_content_light_metadata"))
+        }
         return parts.isEmpty ? text("metadata_complete") : parts.joined(separator: " · ")
-    }
-
-    static func diagnosticSessionSummary(
-        sessionIdPrefix: String,
-        serverIp: String,
-        resolution: String,
-        fps: Int,
-        codec: String
-    ) -> String {
-        format("diagnostic_session_summary", sessionIdPrefix, serverIp, resolution, fps, codec)
-    }
-
-    static func displayLayerMetrics(
-        totalFrames: Int,
-        droppedFrames: Int,
-        corruptedFrames: Int,
-        accumulatedFrameDelayMs: Double
-    ) -> String {
-        format("display_layer_metrics", totalFrames, droppedFrames, corruptedFrames, accumulatedFrameDelayMs)
-    }
-
-    static func colorDiagnosticStatus(
-        preference: String,
-        requested: String,
-        detected: String,
-        display: String
-    ) -> String {
-        format("color_diagnostic_status", preference, requested, detected, display)
-    }
-
-    static func decodedVideoStatus(
-        decoderPath: String,
-        mode: String,
-        width: Int,
-        height: Int,
-        pixelFormatName: String,
-        bitDepth: String,
-        metadataSummary: String
-    ) -> String {
-        format("decoded_video_status", decoderPath, mode, width, height, pixelFormatName, bitDepth, metadataSummary)
     }
 
     static func videoCodecLabel(_ codec: VideoCodec) -> String {
@@ -250,9 +204,9 @@ enum L10n {
 
     static func remoteInputModeLabel(_ mode: RemoteInputMode) -> String {
         switch mode {
-        case .mouse: text("remote_mouse")
         case .gamepad: text("remote_gamepad")
         case .dualsense: text("remote_touchpad")
+        case .gamepadMouse: text("remote_gamepad_mouse")
         }
     }
 

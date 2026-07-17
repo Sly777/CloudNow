@@ -39,7 +39,7 @@ nonisolated struct StreamSettings: Codable, Equatable {
     /// Which controller button triggers the GFN overlay on long-press. Default: Start (≡).
     var overlayTriggerButton: OverlayTriggerButton = .start
     /// Default remote/controller input mode when a stream session starts.
-    var defaultRemoteInputMode: RemoteInputMode = .mouse
+    var defaultRemoteInputMode: RemoteInputMode = .gamepad
     /// Preferred zone URL, e.g. "https://np-aws-us-n-virginia-1.cloudmatchbeta.nvidiagrid.net/"
     /// nil = choose an automatic zone when available, otherwise let the GFN default VPC route.
     var preferredZoneUrl: String? = nil
@@ -67,6 +67,11 @@ nonisolated struct StreamSettings: Codable, Equatable {
 
     var normalizedForClient: StreamSettings {
         var normalized = self
+        #if !DEBUG
+            // Developer diagnostics are unavailable in Release builds. Ignore persisted
+            // values that may have been saved by a Debug build.
+            normalized.diagnosticsEnabled = false
+        #endif
         if !normalized.diagnosticsEnabled {
             normalized.enableRtcEventLog = false
         }
@@ -479,8 +484,12 @@ nonisolated struct SessionAdInfo: Codable, Equatable, Identifiable {
 
     /// Returns the best available media URL.
     var preferredMediaURL: URL? {
-        if let url = adMediaFiles.compactMap({ $0.mediaFileUrl.flatMap(URL.init) }).first { return url }
-        if let url = adUrl.flatMap(URL.init) { return url }
+        if let url = adMediaFiles.compactMap({ $0.mediaFileUrl.flatMap(URL.init) }).first {
+            return url
+        }
+        if let url = adUrl.flatMap(URL.init) {
+            return url
+        }
         return mediaUrl.flatMap(URL.init)
     }
 }
@@ -516,7 +525,9 @@ nonisolated struct SessionInfo {
 
     /// True while the session is sitting in the GFN queue (no timeout applies).
     var isInQueue: Bool {
-        if seatSetupStep == 1 { return true }
+        if seatSetupStep == 1 {
+            return true
+        }
         return (queuePosition ?? 0) > 1
     }
 

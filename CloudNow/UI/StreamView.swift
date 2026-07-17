@@ -212,8 +212,12 @@ struct StreamView: View {
         let caps = LocalVideoCapabilities.detect(codec: .h265)
         let hdrUsable = caps.supportsHardware10BitDecode && caps.displaySupportsHDR && tierPremium
         var badges: [GameFeature] = []
-        if supported.contains(.rtx), tierPremium { badges.append(.rtx) }
-        if supported.contains(.hdr), hdrUsable { badges.append(.hdr) }
+        if supported.contains(.rtx), tierPremium {
+            badges.append(.rtx)
+        }
+        if supported.contains(.hdr), hdrUsable {
+            badges.append(.hdr)
+        }
         loadingBadges = badges
     }
 
@@ -267,7 +271,9 @@ struct StreamView: View {
         case .finding:
             return L10n.text("connecting_to_server")
         case let .inQueue(pos):
-            if let pos { return L10n.format("in_queue_position", pos) }
+            if let pos {
+                return L10n.format("in_queue_position", pos)
+            }
             return L10n.text("in_queue")
         case .preparing:
             return (createdSession?.setupStage ?? .configuring).label
@@ -307,7 +313,9 @@ struct StreamView: View {
             }
         case .preparing:
             let now = Date()
-            if prepareStartedAt == nil { prepareStartedAt = now }
+            if prepareStartedAt == nil {
+                prepareStartedAt = now
+            }
             // seatSetupEta is the server's estimated *remaining* time. Refresh it whenever the
             // server revises the estimate (e.g. 30s → 20s) and count it down between polls so the
             // bar keeps advancing; mapping progress by elapsed / (elapsed + remaining) makes it
@@ -335,47 +343,51 @@ struct StreamView: View {
     // MARK: Streaming
 
     private var streamingView: some View {
-        ZStack {
-            VideoSurfaceViewRepresentable(streamController: streamController, showOverlay: showOverlay)
-                .ignoresSafeArea()
+        VideoSurfaceViewRepresentable(streamController: streamController, showOverlay: showOverlay)
+            .ignoresSafeArea()
+            // The video is a UIViewControllerRepresentable, which (unlike a plain view) can
+            // expand to the union of its ZStack siblings' content. A tall Statistics HUD
+            // (Standard + Diagnostics) grew the layout and zoomed the video via
+            // resizeAspectFill. An overlay is sized to the video and can never grow it, so
+            // the HUD/menu/warning live here instead of as ZStack siblings.
+            .overlay {
+                ZStack {
+                    if showOverlay {
+                        pauseMenu
+                            .transition(.move(edge: .leading).combined(with: .opacity))
+                    }
 
-            if showOverlay {
-                pauseMenu
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-            }
+                    // Stays visible while the pause menu is open (the menu is a left sidebar)
+                    // so cycling the Statistics level takes effect on screen immediately.
+                    if streamController.statsMode != .off {
+                        StatsHUDView(streamController: streamController)
+                            .padding(.top, 60)
+                            .padding(.trailing, 60)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                            .transition(.opacity)
+                    }
 
-            // Stays visible while the pause menu is open (the menu is a left sidebar)
-            // so cycling the Statistics level takes effect on screen immediately.
-            // Padding must sit INSIDE the flexible frame: outside it would grow the
-            // ZStack beyond the screen and stretch the video underneath.
-            if streamController.statsMode != .off {
-                StatsHUDView(streamController: streamController)
-                    .padding(.top, 60)
-                    .padding(.trailing, 60)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .transition(.opacity)
+                    if let warning = streamController.timeWarning, !showOverlay {
+                        timeWarningBanner(warning)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    }
+                }
             }
-
-            if let warning = streamController.timeWarning, !showOverlay {
-                timeWarningBanner(warning)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .animation(.easeInOut(duration: 0.4), value: streamController.timeWarning)
+            .animation(.easeInOut(duration: 0.2), value: showOverlay)
+            .animation(.easeInOut(duration: 0.2), value: streamController.statsMode)
+            .onChange(of: showOverlay) { _, showing in
+                // Pause game input while overlay is open in gamepad mode so D-pad
+                // navigates overlay buttons instead of moving the in-game character.
+                streamController.setInputPaused(showing)
             }
-        }
-        .animation(.easeInOut(duration: 0.4), value: streamController.timeWarning)
-        .animation(.easeInOut(duration: 0.2), value: showOverlay)
-        .animation(.easeInOut(duration: 0.2), value: streamController.statsMode)
-        .onChange(of: showOverlay) { _, showing in
-            // Pause game input while overlay is open in gamepad mode so D-pad
-            // navigates overlay buttons instead of moving the in-game character.
-            streamController.setInputPaused(showing && streamController.remoteMode != .mouse)
-        }
-        .alert(L10n.text("end_session_title"), isPresented: $showExitConfirmation) {
-            Button(L10n.text("end_session"), role: .destructive) { disconnect() }
-            Button(L10n.text("keep_playing"), role: .cancel) {}
-        } message: {
-            Text(L10n.text("end_session_message"))
-        }
+            .alert(L10n.text("end_session_title"), isPresented: $showExitConfirmation) {
+                Button(L10n.text("end_session"), role: .destructive) { disconnect() }
+                Button(L10n.text("keep_playing"), role: .cancel) {}
+            } message: {
+                Text(L10n.text("end_session_message"))
+            }
     }
 
     // MARK: Pause Menu
@@ -465,9 +477,9 @@ struct StreamView: View {
 
     private var remoteModeIcon: String {
         switch streamController.remoteMode {
-        case .mouse: "cursorarrow"
         case .gamepad: "gamecontroller"
         case .dualsense: "hand.point.up.left"
+        case .gamepadMouse: "cursorarrow.click"
         }
     }
 
@@ -560,7 +572,9 @@ struct StreamView: View {
            let end = raw[range.upperBound...].firstIndex(of: "\"")
         {
             let phrase = raw[range.upperBound ..< end].trimmingCharacters(in: .whitespaces)
-            if !phrase.isEmpty { return phrase }
+            if !phrase.isEmpty {
+                return phrase
+            }
         }
         return raw
     }
@@ -829,7 +843,9 @@ struct StreamView: View {
                     loadingPhase = .inQueue(sessionInfo.queuePosition)
                     setupStartTime = nil
                 } else {
-                    if setupStartTime == nil { setupStartTime = Date() }
+                    if setupStartTime == nil {
+                        setupStartTime = Date()
+                    }
                     if let t = setupStartTime, Date().timeIntervalSince(t) > 180 {
                         loadingPhase = .timedOut
                         return
@@ -843,7 +859,9 @@ struct StreamView: View {
                     readyPollStreak = 0
                 }
 
-                if readyPollStreak >= 2 { break }
+                if readyPollStreak >= 2 {
+                    break
+                }
 
                 try await Task.sleep(for: .seconds(2))
                 sessionInfo = try await cloudMatchClient.pollSession(

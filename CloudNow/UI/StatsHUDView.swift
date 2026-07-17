@@ -4,15 +4,25 @@ import SwiftUI
 /// Shared color/format helpers for stream statistics, used by the HUD and the pause menu.
 enum StatsFormat {
     static func pingColor(_ ms: Double) -> Color {
-        if ms < 30 { return .green }
-        if ms < 80 { return .yellow }
-        if ms < 150 { return .orange }
+        if ms < 30 {
+            return .green
+        }
+        if ms < 80 {
+            return .yellow
+        }
+        if ms < 150 {
+            return .orange
+        }
         return .red
     }
 
     static func fpsColor(_ fps: Double) -> Color {
-        if fps >= 55 { return .green }
-        if fps >= 30 { return .yellow }
+        if fps >= 55 {
+            return .green
+        }
+        if fps >= 30 {
+            return .yellow
+        }
         return .red
     }
 
@@ -35,9 +45,21 @@ struct StatsHUDView: View {
         case .off:
             EmptyView()
         case .compact:
-            panel { compactRows }
+            panel { column { compactRows } }
         case .standard:
-            panel { standardSections }
+            // Diagnostics roughly doubles the panel height by appending the Debug section,
+            // which can run off the bottom of the screen. Split into two columns then —
+            // core stats on the left, Debug on the right — so it stays on screen.
+            if streamController.diagnosticsEnabled {
+                panel {
+                    HStack(alignment: .top, spacing: 28) {
+                        column { coreSections }
+                        column { debugSection }
+                    }
+                }
+            } else {
+                panel { column { coreSections } }
+            }
         }
     }
 
@@ -62,14 +84,11 @@ struct StatsHUDView: View {
 
     // MARK: Standard
 
-    @ViewBuilder private var standardSections: some View {
+    @ViewBuilder private var coreSections: some View {
         networkSection
         videoSection
         audioSection
         sessionSection
-        if streamController.diagnosticsEnabled {
-            debugSection
-        }
     }
 
     @ViewBuilder private var networkSection: some View {
@@ -104,6 +123,7 @@ struct StatsHUDView: View {
             "\(Int(stats.jitterBufferDelayMs)) / \(Int(stats.jitterBufferTargetDelayMs)) ms"
         )
         row(L10n.text("decode_time"), StatsFormat.formatMs(stats.decodeTimeMs))
+        row(L10n.text("processing_delay"), StatsFormat.formatMs(stats.processingDelayMs))
         row(L10n.text("format"), videoFormatValue)
     }
 
@@ -142,11 +162,9 @@ struct StatsHUDView: View {
 
     @ViewBuilder private var debugSection: some View {
         let stats = streamController.stats
-        let pipeline = streamController.videoDiagnostics
         header(L10n.text("debug"))
         row("NACK/PLI/FIR", "\(stats.nackCount)/\(stats.pliCount)/\(stats.firCount)")
         row(L10n.text("retransmits"), "\(stats.retransmittedPackets)")
-        row(L10n.text("processing_delay"), StatsFormat.formatMs(stats.processingDelayMs))
         row(
             L10n.text("input_queue"),
             String(
@@ -162,10 +180,10 @@ struct StatsHUDView: View {
             row(L10n.text("decoder"), stats.decoderImplementation + hardware)
         }
         if stats.inputDropped > 0 {
-            line(L10n.format("input_drops_status", stats.inputDropped), color: .orange)
+            line(L10n.format("input_drops_status", String(stats.inputDropped)), color: .orange)
         }
         if stats.inputSuperseded > 0 {
-            line(L10n.format("analog_snapshots_coalesced_status", stats.inputSuperseded))
+            line(L10n.format("analog_snapshots_coalesced_status", String(stats.inputSuperseded)))
         }
         if !stats.localCandidateType.isEmpty {
             row(
@@ -173,43 +191,8 @@ struct StatsHUDView: View {
                 "\(stats.localCandidateType) → \(stats.remoteCandidateType) (\(stats.selectedProtocol))"
             )
         }
-        if !streamController.diagnosticSessionSummary.isEmpty {
-            line(streamController.diagnosticSessionSummary)
-        }
-        line(L10n.format(
-            "app_queue_status",
-            pipeline.enqueuedFrames, pipeline.droppedFrames, pipeline.backpressureEvents
-        ))
-        line(L10n.format(
-            "sample_and_convert_status",
-            StatsFormat.formatMs(pipeline.averageSampleCreationMs),
-            StatsFormat.formatMs(pipeline.averageConversionMs)
-        ))
-        line(L10n.displayLayerMetrics(
-            totalFrames: pipeline.avTotalFrames,
-            droppedFrames: pipeline.avDroppedFrames,
-            corruptedFrames: pipeline.avCorruptedFrames,
-            accumulatedFrameDelayMs: pipeline.avAccumulatedFrameDelayMs
-        ))
-        line(L10n.colorDiagnosticStatus(
-            preference: streamController.colorState.preference.label,
-            requested: L10n.streamColorModeLabel(streamController.colorState.requestedMode),
-            detected: detectedColorLabel(pipeline: pipeline),
-            display: L10n.hdrSupportLabel(streamController.colorState.displayHDRSupport)
-        ))
         if let fallback = streamController.colorState.fallbackReason {
             line("\(L10n.text("fallback")) \(L10n.colorFallbackReasonLabel(fallback))", color: .orange)
-        }
-        if let format = pipeline.decodedVideoFormat {
-            line(L10n.decodedVideoStatus(
-                decoderPath: L10n.decoderPathLabel(format.decoderPath),
-                mode: L10n.detectedColorModeLabel(format.mode),
-                width: format.width,
-                height: format.height,
-                pixelFormatName: format.pixelFormatName,
-                bitDepth: format.bitDepth.map { "\($0)-bit" } ?? L10n.text("unknown_bit_depth"),
-                metadataSummary: format.metadataDiagnosticSummary
-            ))
         }
         if streamController.rtcEventLogURL != nil {
             line(L10n.text("rtc_event_log_active"))
@@ -218,15 +201,21 @@ struct StatsHUDView: View {
 
     // MARK: Building blocks
 
+    private let columnWidth: CGFloat = 380
+
     private func panel(@ViewBuilder content: () -> some View) -> some View {
+        content()
+            .font(.system(size: 21).monospacedDigit())
+            .padding(20)
+            .background(panelBackgroundColor, in: RoundedRectangle(cornerRadius: 12))
+            .allowsHitTesting(false)
+    }
+
+    private func column(@ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             content()
         }
-        .font(.system(size: 21).monospacedDigit())
-        .frame(width: 380)
-        .padding(20)
-        .background(panelBackgroundColor, in: RoundedRectangle(cornerRadius: 12))
-        .allowsHitTesting(false)
+        .frame(width: columnWidth, alignment: .leading)
     }
 
     private func header(_ title: String) -> some View {
@@ -280,16 +269,6 @@ struct StatsHUDView: View {
 
     private var secondaryForegroundColor: Color {
         primaryForegroundColor.opacity(0.68)
-    }
-
-    private func detectedColorLabel(pipeline: VideoPipelineSnapshot) -> String {
-        if let format = pipeline.decodedVideoFormat {
-            return L10n.detectedColorModeLabel(format.mode)
-        }
-        if let detected = streamController.colorState.detectedMode {
-            return L10n.detectedColorModeLabel(detected)
-        }
-        return L10n.text("unknown")
     }
 
     private var colorModeValue: String {
