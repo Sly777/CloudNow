@@ -1,4 +1,4 @@
-import GameController
+@preconcurrency import GameController
 import SwiftUI
 import UIKit
 
@@ -33,10 +33,10 @@ struct MainTabView: View {
                 )
             }
             Tab(L10n.text("library"), systemImage: "books.vertical.fill", value: AppTab.library) {
-                LibraryView(games: viewModel.libraryGames, onPlay: { gameToPlay = $0 })
+                LibraryView(onPlay: { gameToPlay = $0 })
             }
             Tab(L10n.text("store"), systemImage: "bag.fill", value: AppTab.store) {
-                StoreView(games: viewModel.mainGames, onPlay: { gameToPlay = $0 })
+                StoreView(onPlay: { gameToPlay = $0 })
             }
             Tab(L10n.text("settings"), systemImage: "gearshape.fill", value: AppTab.settings) {
                 SettingsView()
@@ -53,14 +53,31 @@ struct MainTabView: View {
         .task { await viewModel.load(authManager: authManager) }
         .task { await viewModel.measureTopZones() }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active else { return }
-            Task { await viewModel.refreshLibrary(authManager: authManager) }
+            switch phase {
+            case .active:
+                MemoryLifecycleCoordinator.shared.appDidBecomeActive()
+                Task { await viewModel.refreshLibrary(authManager: authManager) }
+            case .background:
+                MemoryLifecycleCoordinator.shared.appDidEnterBackground()
+            case .inactive:
+                break
+            @unknown default:
+                break
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.didReceiveMemoryWarningNotification
+        )) { _ in
+            MemoryLifecycleCoordinator.shared.didReceiveMemoryWarning()
         }
         .onChange(of: viewModel.streamSettings) { viewModel.saveSettings() }
         .onChange(of: gameToPlay) { _, new in
             if new == nil {
+                MemoryLifecycleCoordinator.shared.streamDidClose()
                 directSessionToResume = nil
                 Task { await viewModel.refreshActiveSessions(authManager: authManager) }
+            } else {
+                MemoryLifecycleCoordinator.shared.streamWillOpen()
             }
         }
         .fullScreenCover(item: $gameToPlay) { game in
@@ -140,7 +157,7 @@ private struct ControllerTabNavigationBridge: UIViewControllerRepresentable {
         context.coordinator.refreshControllerHandlers()
     }
 
-    final class Coordinator {
+    @MainActor final class Coordinator {
         let viewController = UIViewController()
 
         var onPrevious: () -> Void
@@ -160,7 +177,7 @@ private struct ControllerTabNavigationBridge: UIViewControllerRepresentable {
             registerForControllerNotifications()
         }
 
-        deinit {
+        isolated deinit {
             observers.forEach(NotificationCenter.default.removeObserver)
             clearControllerHandlers()
         }
@@ -176,13 +193,17 @@ private struct ControllerTabNavigationBridge: UIViewControllerRepresentable {
             observers.append(
                 center.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { [weak self] notification in
                     guard let controller = notification.object as? GCController else { return }
-                    self?.installHandlers(on: controller)
+                    MainActor.assumeIsolated {
+                        self?.installHandlers(on: controller)
+                    }
                 }
             )
             observers.append(
                 center.addObserver(forName: .GCControllerDidDisconnect, object: nil, queue: .main) { [weak self] _ in
-                    self?.clearControllerHandlers()
-                    self?.refreshControllerHandlers()
+                    MainActor.assumeIsolated {
+                        self?.clearControllerHandlers()
+                        self?.refreshControllerHandlers()
+                    }
                 }
             )
             refreshControllerHandlers()

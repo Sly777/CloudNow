@@ -5,8 +5,6 @@ struct HomeView: View {
     let onResume: (ResumableSession) -> Void
 
     @Environment(GamesViewModel.self) var viewModel
-    @Environment(AuthManager.self) var authManager
-    @State private var tick = 0
     @State private var carouselRequest: CarouselRequest?
     @State private var restoreScrollId: String?
 
@@ -79,9 +77,6 @@ struct HomeView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: carouselRequest?.id)
         .toolbar(.hidden, for: .navigationBar)
-        .onAppear {
-            Task { await viewModel.refreshActiveSessions(authManager: authManager) }
-        }
         .task(id: viewModel.resumableSession?.session.sessionId) {
             guard viewModel.resumableSession != nil else { return }
             while !Task.isCancelled {
@@ -103,16 +98,10 @@ struct HomeView: View {
 
     private func resumeBanner(_ rs: ResumableSession) -> some View {
         ZStack(alignment: .bottomLeading) {
-            AsyncImage(url: rs.game.heroBannerUrl.flatMap { URL(string: $0) }) { phase in
-                switch phase {
-                case let .success(image):
-                    image.resizable().aspectRatio(contentMode: .fill)
-                case .failure, .empty:
-                    Rectangle().fill(Color.gray.opacity(0.2))
-                @unknown default:
-                    Color.gray.opacity(0.2)
-                }
-            }
+            SharedArtworkImage(
+                urlString: rs.game.heroBannerUrl,
+                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+            )
             .frame(maxWidth: .infinity)
             .frame(height: 420)
             .clipped()
@@ -179,7 +168,7 @@ struct HomeView: View {
             .padding(.horizontal, 60)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 24) {
+                LazyHStack(spacing: 24) {
                     ForEach(games) { game in
                         GameCardView(game: game) { onPlay(game) }
                             .frame(width: 200)
@@ -218,7 +207,7 @@ struct HomeView: View {
                 .shimmer()
                 .padding(.horizontal, 60)
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 24) {
+                LazyHStack(spacing: 24) {
                     ForEach(0 ..< 6, id: \.self) { _ in
                         GameCardSkeleton().frame(width: 200)
                     }
@@ -253,36 +242,13 @@ struct HomeView: View {
 private struct HeroBannerView: View {
     let game: GameInfo
     let onPlay: (GameInfo) -> Void
-    @State private var attempt = 0
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            AsyncImage(url: game.heroBannerUrl.flatMap { URL(string: $0) }) { phase in
-                switch phase {
-                case let .success(image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                case .failure:
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.2))
-                        .shimmer()
-                        .onAppear {
-                            guard attempt < 3 else { return }
-                            Task {
-                                try? await Task.sleep(for: .seconds(pow(2.0, Double(attempt)) * 0.5))
-                                attempt += 1
-                            }
-                        }
-                case .empty:
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.2))
-                        .shimmer()
-                @unknown default:
-                    Color.gray.opacity(0.2)
-                }
-            }
-            .id(attempt)
+            SharedArtworkImage(
+                urlString: game.heroBannerUrl,
+                maxPixelSize: ArtworkImagePipeline.heroArtPixelSize
+            )
             .frame(maxWidth: .infinity)
             .frame(height: 420)
 
